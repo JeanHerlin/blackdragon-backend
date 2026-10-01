@@ -1,0 +1,157 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Game {
+  id                    String                 @id @default(uuid())
+  code                  String                 @unique
+  label                 String
+  // g2bulk only publishes one image per game, not per catalogue item (verified against
+  // their public API) — this is the default shown on every product's card unless a
+  // product sets its own imageUrl override below.
+  imageUrl              String?
+  isActive              Boolean                @default(false)
+  categories            Category[]
+  products              Product[]
+  supplierCatalogEntries SupplierCatalogEntry[]
+}
+
+model Category {
+  id                         String    @id @default(uuid())
+  gameId                     String
+  game                       Game      @relation(fields: [gameId], references: [id])
+  code                       String
+  label                      String
+  requiresAccountCredentials Boolean   @default(false)
+  products                   Product[]
+
+  @@unique([gameId, code])
+}
+
+model Product {
+  id                    String                @id @default(uuid())
+  gameId                String
+  game                  Game                  @relation(fields: [gameId], references: [id])
+  categoryId            String
+  category              Category              @relation(fields: [categoryId], references: [id])
+  label                 String
+  // Freeform context shown to the admin — g2bulk-sourced products get it from the
+  // supplier's own catalogue entry; manually-added "compte" products (level up,
+  // largage, ...) rely on it entirely since there's no supplier record to read from.
+  description           String?
+  // Falls back to the parent Game's imageUrl when unset — only set here to override it
+  // for a specific product (manual "compte" products especially, which have no g2bulk
+  // default at all).
+  imageUrl              String?
+  productType           String                @default("recharge") // recharge | abonnement | levelup | largage — category-dependent
+  externalRef           String                @unique
+  basePriceUsd          Float // supplier cost as quoted by g2bulk, always USD
+  salePrice             Float // what the customer pays, always Ar
+  stockQty              Int                   @default(0)
+  stockMode             String                @default("unlimited") // unlimited | limited — limited + stockQty=0 means out of stock
+  isActive              Boolean               @default(true)
+  deliveryMode          String // auto_g2bulk | manual
+  // Which real g2bulk catalogue entry this was created from — null means it predates
+  // the catalog-picker flow and hasn't been verified against a real supplier reference.
+  sourceCatalogEntryId  String?
+  sourceCatalogEntry    SupplierCatalogEntry? @relation(fields: [sourceCatalogEntryId], references: [id])
+  orders                Order[]
+}
+
+// A snapshot of what g2bulk actually offers, fetched from their public catalogue API
+// (see architecture notes) — the admin can only create a Product by picking one of
+// these, so externalRef always matches a real supplier reference and delivery can
+// never fail because of a typo'd or invented id. `region` exists so a second g2bulk
+// region can be added later without a schema change — see conversation with the client.
+model SupplierCatalogEntry {
+  id           String    @id @default(uuid())
+  gameId       String
+  game         Game      @relation(fields: [gameId], references: [id])
+  supplier     String    @default("g2bulk")
+  region       String
+  supplierRef  String // g2bulk's raw catalogue id
+  name         String // g2bulk's raw name — shown to the admin as the product description
+  basePriceUsd Float
+  productType  String // recharge | abonnement
+  fetchedAt    DateTime  @default(now())
+  products     Product[]
+
+  @@unique([supplier, region, supplierRef])
+}
+
+model Order {
+  id                String             @id @default(uuid())
+  channel           String             @default("dev")
+  customerRef       String
+  productId         String
+  product           Product            @relation(fields: [productId], references: [id])
+  purchaseType      String // uid | compte
+  targetUid         String?
+  amount            Float
+  status            String             @default("pending_payment")
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  payment           Payment?
+  delivery          Delivery?
+  accountCredential AccountCredential?
+  credentialToken   CredentialToken?
+}
+
+model Payment {
+  id          String   @id @default(uuid())
+  orderId     String   @unique
+  order       Order    @relation(fields: [orderId], references: [id])
+  provider    String   @default("papi")
+  providerRef String   @unique
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+}
+
+model Delivery {
+  id          String    @id @default(uuid())
+  orderId     String    @unique
+  order       Order     @relation(fields: [orderId], references: [id])
+  mode        String // auto_g2bulk | manual
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  lastError   String?
+  deliveredAt DateTime?
+}
+
+model AccountCredential {
+  id                String    @id @default(uuid())
+  orderId           String    @unique
+  order             Order     @relation(fields: [orderId], references: [id])
+  loginEncrypted    String
+  passwordEncrypted String
+  providedAt        DateTime  @default(now())
+  viewedAt          DateTime?
+}
+
+// Single row, admin-editable — margin display converts basePriceUsd to Ar using this.
+// Not the customer-facing multi-currency system from the architecture doc (§7, later);
+// this one exists purely so the backoffice can show a correct margin next to each price.
+model Settings {
+  id            String   @id @default(uuid())
+  usdToArRate   Float    @default(4500)
+  // Whether the admin is available to process manual "achat par compte" deliveries —
+  // that channel requires a human to log into the customer's account, so it must be
+  // signalled off when no one is available to act on it.
+  isAdminActive Boolean  @default(true)
+  updatedAt     DateTime @updatedAt
+}
+
+model CredentialToken {
+  id        String    @id @default(uuid())
+  orderId   String    @unique
+  order     Order     @relation(fields: [orderId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
