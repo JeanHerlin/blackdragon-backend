@@ -23,11 +23,4 @@ export function getAdmin(): AdminRecord {
   return readAdmin();
 }
 
-export function updatePasswordHash(passwordHash: string): AdminRecord {
-  const admin = readAdmin();
-  admin.passwordHash = passwordHash;
-  writeAdmin(admin);
-  return admin;
-}
-
 export { DATA_FILE };

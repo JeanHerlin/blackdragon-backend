@@ -14,6 +14,10 @@ interface ResetTokenState {
   tokenHash: string;
   expiresAt: number;
   used: boolean;
+  // The email the admin typed when requesting the link — captured here rather than at
+  // reset time so the existing forgot-password form (single email field) can double as
+  // "what email do you want going forward", with no frontend change needed.
+  newEmail: string;
 }
 
 // Single admin, single active reset flow at a time — a new request simply overwrites
@@ -21,7 +25,14 @@ interface ResetTokenState {
 let activeResetToken: ResetTokenState | null = null;
 
 export async function login({ email, password }: { email: string; password: string }) {
-  const admin = adminRepository.getAdmin();
+  let admin;
+  try {
+    admin = adminRepository.getAdmin();
+  } catch {
+    // No admin.json yet (fresh prod deploy, no account created at all) — same generic
+    // message as a wrong password, so this never reveals bootstrap state to a caller.
+    throw new AppError('Invalid email or password', 401);
+  }
 
   if (email !== admin.email) {
     throw new AppError('Invalid email or password', 401);
@@ -38,13 +49,14 @@ export async function login({ email, password }: { email: string; password: stri
   return { token, email: admin.email };
 }
 
+// This is also how the very first admin account gets created in production: there is
+// no separate CLI seed step — whoever controls the fixed recovery inbox (see
+// ADMIN_NOTIFICATION_EMAIL) can bootstrap or fully replace the admin identity by
+// requesting a reset and completing it. The submitted email does not need to match an
+// existing account; it becomes the new login email once the link is completed.
 export async function requestPasswordReset({ email }: { email: string }): Promise<void> {
-  const admin = adminRepository.getAdmin();
-
-  // Silently no-op on a mismatched email: this is a public endpoint, and we don't
-  // want it to reveal whether a given address is the admin's or trigger unwanted emails.
-  if (email !== admin.email) {
-    return;
+  if (!email || typeof email !== 'string') {
+    throw new AppError('email is required', 400);
   }
 
   const rawToken = generateRawToken();
@@ -52,17 +64,19 @@ export async function requestPasswordReset({ email }: { email: string }): Promis
     tokenHash: hashToken(rawToken),
     expiresAt: Date.now() + RESET_TOKEN_TTL_MS,
     used: false,
+    newEmail: email,
   };
 
   const resetLink = `${env.frontendUrl}/admin/reset-password?token=${rawToken}`;
 
   await emailProvider.sendEmail({
     to: ADMIN_NOTIFICATION_EMAIL,
-    subject: 'Black Dragon FF — Réinitialisation du mot de passe admin',
+    subject: 'Black Dragon FF — Réinitialisation des identifiants admin',
     htmlContent: `
-      <p>Une demande de réinitialisation du mot de passe admin a été effectuée.</p>
-      <p><a href="${resetLink}">Cliquez ici pour choisir un nouveau mot de passe</a></p>
-      <p>Ce lien expire dans 30 minutes. Si tu n'es pas à l'origine de cette demande, ignore cet email.</p>
+      <p>Une demande de réinitialisation des identifiants admin a été effectuée pour l'adresse : <strong>${email}</strong>.</p>
+      <p><a href="${resetLink}">Cliquez ici pour définir le nouveau mot de passe</a></p>
+      <p>En validant ce lien, cette adresse et le mot de passe choisi remplaceront les identifiants admin actuels.</p>
+      <p>Ce lien expire dans 30 minutes. Si tu n'es pas à l'origine de cette demande, ignore cet email — rien ne change tant que le lien n'est pas validé.</p>
     `,
   });
 }
@@ -84,7 +98,9 @@ export async function resetPassword({ token, newPassword }: { token: string; new
   }
 
   const passwordHash = await bcrypt.hash(newPassword, 10);
-  adminRepository.updatePasswordHash(passwordHash);
+  // Replaces the admin record outright (email included) rather than only updating the
+  // password on the existing one — see function comment above.
+  adminRepository.writeAdmin({ email: activeResetToken.newEmail, passwordHash });
   activeResetToken.used = true;
 }
 

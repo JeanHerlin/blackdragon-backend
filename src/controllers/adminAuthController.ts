@@ -10,7 +10,8 @@ export const login = asyncHandler(async (req, res) => {
 export const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
   await adminAuthService.requestPasswordReset({ email });
-  // Same response whether the email matched or not, on purpose (see service layer).
+  // The submitted email isn't checked against anything — see service layer — so the
+  // response is deliberately generic regardless of what was typed.
   res.json({ message: 'If this email is registered, a reset link has been sent.' });
 });
 
