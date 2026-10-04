@@ -1,7 +1,7 @@
 import { PrismaClient, SupplierCatalogEntry } from '@prisma/client';
 const prisma = new PrismaClient();
 
-const REGION = 'middle_east';
+const REGION = 'freefire_me';
 
 interface SupplierEntrySeed {
   supplierRef: string;
@@ -113,11 +113,28 @@ async function main() {
     });
   }
 
-  // Placeholder "achat par compte" entries — real list to be defined when that category
-  // is tackled (see conversation); kept minimal just so the category isn't empty.
+  // Real "achat par compte" menu as sold by the client. None of these have a g2bulk
+  // catalogue entry (confirmed against g2bulk's real API: it never lists level-up packs
+  // or airdrops, and MENA's region has no subscriptions either) — delivery is manual by
+  // a human logging into the customer's account, so cost is admin-entered, not supplier-verified.
+  // Largage/Level Up costs are the USD face value given in the product name itself (exact,
+  // not estimated). The abonnement tiers reuse the UID side's confirmed per-tier USD cost
+  // where the diamond count matches, and interpolate proportionally for the new tiers —
+  // flagged as estimates, editable by the admin like any other unverified cost.
   const compteProducts: ProductSeed[] = [
-    { label: 'Weekly (450💎)', externalRef: 'ff-compte-weekly', basePriceUsd: 1.3, salePrice: 9500, productType: 'abonnement' },
-    { label: 'Monthly (2600💎)', externalRef: 'ff-compte-monthly', basePriceUsd: 6.2, salePrice: 46000, productType: 'abonnement' },
+    { label: 'Weekly Lite (100💎)', externalRef: 'ff-compte-weekly-lite', basePriceUsd: 0.36, salePrice: 3500, productType: 'abonnement' },
+    { label: 'Weekly (450💎)', externalRef: 'ff-compte-weekly', basePriceUsd: 1.61, salePrice: 9500, productType: 'abonnement' },
+    { label: 'Monthly (2600💎)', externalRef: 'ff-compte-monthly', basePriceUsd: 7.58, salePrice: 38500, productType: 'abonnement' },
+    { label: 'Monthly + Weekly (3050💎)', externalRef: 'ff-compte-monthly-weekly', basePriceUsd: 9.19, salePrice: 48000, productType: 'abonnement' },
+    { label: 'Monthly + Weekly x2 (3500💎)', externalRef: 'ff-compte-monthly-weekly-2', basePriceUsd: 10.55, salePrice: 57500, productType: 'abonnement' },
+    { label: 'Monthly + Weekly x3 (3950💎)', externalRef: 'ff-compte-monthly-weekly-3', basePriceUsd: 11.9, salePrice: 67000, productType: 'abonnement' },
+    { label: 'Monthly + Weekly x4 (4400💎)', externalRef: 'ff-compte-monthly-weekly-4', basePriceUsd: 13.26, salePrice: 76500, productType: 'abonnement' },
+    { label: 'Largage 0.99$', externalRef: 'ff-compte-largage-099', basePriceUsd: 0.99, salePrice: 5500, productType: 'largage' },
+    { label: 'Largage 1.99$', externalRef: 'ff-compte-largage-199', basePriceUsd: 1.99, salePrice: 10500, productType: 'largage' },
+    { label: 'Level Up 0.29$ (120💎)', externalRef: 'ff-compte-levelup-029', basePriceUsd: 0.29, salePrice: 3000, productType: 'levelup' },
+    { label: 'Level Up 0.50$ (200💎)', externalRef: 'ff-compte-levelup-050', basePriceUsd: 0.5, salePrice: 4000, productType: 'levelup' },
+    { label: 'Level Up 0.79$ (350💎)', externalRef: 'ff-compte-levelup-079', basePriceUsd: 0.79, salePrice: 5000, productType: 'levelup' },
+    { label: 'Pack Complet Level Up (1270💎)', externalRef: 'ff-compte-levelup-pack-complet', basePriceUsd: 1.58, salePrice: 24000, productType: 'levelup' },
   ];
 
   for (const product of compteProducts) {

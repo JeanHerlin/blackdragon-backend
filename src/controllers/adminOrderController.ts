@@ -3,7 +3,12 @@ import * as orderService from '../services/orderService';
 import * as credentialViewService from '../services/credentialViewService';
 
 export const listOrders = asyncHandler(async (req, res) => {
-  res.json(await orderService.listOrders(req.query.status as string | undefined));
+  res.json(
+    await orderService.listOrders({
+      status: req.query.status as string | undefined,
+      purchaseType: req.query.purchaseType as string | undefined,
+    }),
+  );
 });
 
 export const getOrder = asyncHandler(async (req, res) => {
@@ -20,4 +25,16 @@ export const markManualDelivered = asyncHandler(async (req, res) => {
 
 export const getCredentials = asyncHandler(async (req, res) => {
   res.json(await credentialViewService.revealCredentials(req.params.id));
+});
+
+export const rejectOrder = asyncHandler(async (req, res) => {
+  res.json(await orderService.rejectOrder(req.params.id, req.body.note));
+});
+
+export const flagIssue = asyncHandler(async (req, res) => {
+  res.json(await orderService.flagIssue(req.params.id, req.body.note));
+});
+
+export const resolveIssue = asyncHandler(async (req, res) => {
+  res.json(await orderService.resolveIssue(req.params.id));
 });

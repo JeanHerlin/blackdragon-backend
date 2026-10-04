@@ -2,8 +2,9 @@ import asyncHandler from '../utils/asyncHandler';
 import * as categoryDashboardService from '../services/categoryDashboardService';
 import * as catalogService from '../services/catalogService';
 
-// Only region wired up so far — see conversation with the client about g2bulk regions.
-const DEFAULT_SUPPLIER_REGION = 'middle_east';
+// g2bulk's own code for this region — used when the per-category picker (not the
+// cross-region "Packs g2bulk" tab) doesn't specify one explicitly.
+const DEFAULT_SUPPLIER_REGION = 'freefire_me';
 
 export const getDashboard = asyncHandler(async (req, res) => {
   res.json(await categoryDashboardService.getCategoryDashboard(req.params.categoryCode, req.query.date as string | undefined));

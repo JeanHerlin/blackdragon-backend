@@ -167,8 +167,46 @@ export async function markManualDelivered(orderId: string) {
   return orderRepository.updateStatus(orderId, 'delivered');
 }
 
-export function listOrders(status?: string) {
-  return orderRepository.listOrders({ status });
+const TERMINAL_STATUSES = ['delivered', 'rejected'];
+
+// Admin decides not to fulfill (fraud, unreachable customer, etc.) — distinct from
+// payment_failed, which is an automatic payment-layer event, not a human decision.
+export async function rejectOrder(orderId: string, note?: string) {
+  const order = await orderRepository.findById(orderId);
+  if (!order) throw new AppError('Order not found', 404);
+  if (TERMINAL_STATUSES.includes(order.status)) {
+    throw new AppError('Order is already in a final state', 400);
+  }
+  return orderRepository.updateStatusAndNote(orderId, 'rejected', note || null);
+}
+
+// A separate state from the normal pipeline (not a sub-status of manual_pending/
+// credentials_received) so an order can be "stuck on a problem" regardless of where it
+// was in the flow when the problem showed up.
+export async function flagIssue(orderId: string, note: string) {
+  if (!note || typeof note !== 'string') throw new AppError('note is required', 400);
+  const order = await orderRepository.findById(orderId);
+  if (!order) throw new AppError('Order not found', 404);
+  if (TERMINAL_STATUSES.includes(order.status)) {
+    throw new AppError('Order is already in a final state', 400);
+  }
+  return orderRepository.updateStatusAndNote(orderId, 'issue', note);
+}
+
+export async function resolveIssue(orderId: string) {
+  const order = await orderRepository.findById(orderId);
+  if (!order) throw new AppError('Order not found', 404);
+  if (order.status !== 'issue') {
+    throw new AppError('Order does not have an open issue', 400);
+  }
+  // Resume wherever it naturally sits in the pipeline: credentials already in means
+  // it's ready for the admin to action again, otherwise it's still waiting on the customer.
+  const nextStatus = order.accountCredential ? 'credentials_received' : 'manual_pending';
+  return orderRepository.updateStatusAndNote(orderId, nextStatus, null);
+}
+
+export function listOrders({ status, purchaseType }: { status?: string; purchaseType?: string } = {}) {
+  return orderRepository.listOrders({ status, purchaseType });
 }
 
 export async function getOrder(orderId: string) {

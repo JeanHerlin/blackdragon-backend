@@ -54,23 +54,81 @@ export function findSupplierCatalogEntryById(id: string) {
   return prisma.supplierCatalogEntry.findUnique({ where: { id } });
 }
 
+// Every g2bulk entry across every synced region, each annotated with which
+// categories have already turned it into a Product — powers the "Packs g2bulk"
+// browser tab, which is cross-region/cross-category by design (unlike the per-category
+// picker above).
+export function listAllSupplierEntries(gameId: string) {
+  return prisma.supplierCatalogEntry.findMany({
+    where: { gameId },
+    orderBy: [{ region: 'asc' }, { basePriceUsd: 'asc' }],
+    include: { products: { select: { id: true, category: { select: { code: true, label: true } } } } },
+  });
+}
+
+export function upsertSupplierCatalogEntry(data: {
+  gameId: string;
+  supplier: string;
+  region: string;
+  supplierRef: string;
+  name: string;
+  basePriceUsd: number;
+  productType: string;
+}) {
+  return prisma.supplierCatalogEntry.upsert({
+    where: { supplier_region_supplierRef: { supplier: data.supplier, region: data.region, supplierRef: data.supplierRef } },
+    update: { name: data.name, basePriceUsd: data.basePriceUsd },
+    create: data,
+  });
+}
+
+// Public-facing shape only — never basePriceUsd (our cost), externalRef, deliveryMode or
+// sourceCatalogEntryId, none of which a customer or the bot should ever see.
+const PUBLIC_PRODUCT_SELECT = {
+  id: true,
+  label: true,
+  description: true,
+  imageUrl: true,
+  productType: true,
+  salePrice: true,
+  stockMode: true,
+  stockQty: true,
+  category: { select: { code: true, label: true, requiresAccountCredentials: true } },
+  game: { select: { code: true, imageUrl: true } },
+} satisfies Prisma.ProductSelect;
+
 export function listProducts({
   gameId,
   categoryId,
+  productType,
   onlyActive = true,
 }: {
   gameId?: string;
   categoryId?: string;
+  productType?: string;
   onlyActive?: boolean;
 }) {
   return prisma.product.findMany({
     where: {
       ...(gameId ? { gameId } : {}),
       ...(categoryId ? { categoryId } : {}),
+      ...(productType ? { productType } : {}),
       ...(onlyActive ? { isActive: true } : {}),
     },
-    include: { category: true },
+    select: PUBLIC_PRODUCT_SELECT,
   });
+}
+
+// Powers the bot's second step (after picking "uid"/"compte"): which product families
+// actually have active products right now, so it never offers an empty type to pick.
+export function listProductTypes(categoryId: string) {
+  return prisma.product
+    .findMany({
+      where: { categoryId, isActive: true },
+      distinct: ['productType'],
+      select: { productType: true },
+    })
+    .then((rows) => rows.map((r) => r.productType));
 }
 
 export function findProductById(id: string) {

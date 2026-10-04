@@ -8,5 +8,8 @@ router.get('/:id', controller.getOrder);
 router.post('/:id/retry-delivery', controller.retryDelivery);
 router.post('/:id/manual-deliver', controller.markManualDelivered);
 router.get('/:id/credentials', controller.getCredentials);
+router.post('/:id/reject', controller.rejectOrder);
+router.post('/:id/flag-issue', controller.flagIssue);
+router.post('/:id/resolve-issue', controller.resolveIssue);
 
 export default router;

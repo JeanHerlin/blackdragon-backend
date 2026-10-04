@@ -31,5 +31,12 @@ export async function notify(event: NotificationEvent, order: NotifiableOrder): 
   if (!template) throw new Error(`Unknown notification event: ${event}`);
 
   const { subject, htmlContent } = template(order);
-  await emailProvider.sendEmail({ to: ADMIN_NOTIFICATION_EMAIL, subject, htmlContent });
+  try {
+    await emailProvider.sendEmail({ to: ADMIN_NOTIFICATION_EMAIL, subject, htmlContent });
+  } catch (err: any) {
+    // This is a side-channel alert, not the critical path — a failed notification must
+    // never break order/payment/delivery processing, which has already succeeded by
+    // the time this runs.
+    console.error(`[notificationService] failed to send "${event}" notification:`, err.message);
+  }
 }

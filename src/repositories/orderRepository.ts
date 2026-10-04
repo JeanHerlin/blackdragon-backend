@@ -30,12 +30,17 @@ export function updateStatus(id: string, status: string) {
   return prisma.order.update({ where: { id }, data: { status }, include: withRelations });
 }
 
-// "Needs action" statuses surface first — see backoffice-ux skill's priority-queue rule.
-const PRIORITY_STATUSES = ['delivery_failed', 'manual_pending'];
+// Used by reject/flag-issue (set a reason) and resolve (clear it, note: undefined).
+export function updateStatusAndNote(id: string, status: string, note?: string | null) {
+  return prisma.order.update({ where: { id }, data: { status, adminNote: note }, include: withRelations });
+}
 
-export async function listOrders({ status }: { status?: string } = {}) {
+// "Needs action" statuses surface first — see backoffice-ux skill's priority-queue rule.
+const PRIORITY_STATUSES = ['delivery_failed', 'manual_pending', 'issue'];
+
+export async function listOrders({ status, purchaseType }: { status?: string; purchaseType?: string } = {}) {
   const orders = await prisma.order.findMany({
-    where: status ? { status } : {},
+    where: { ...(status ? { status } : {}), ...(purchaseType ? { purchaseType } : {}) },
     include: withRelations,
     orderBy: { createdAt: 'asc' },
   });

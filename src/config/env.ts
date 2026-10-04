@@ -34,6 +34,14 @@ const env = {
   // Not required: only read when PAYMENT_PROVIDER=papi / DELIVERY_PROVIDER=g2bulk is set.
   papi: { apiKey: process.env.PAPI_API_KEY },
   g2bulk: { apiKey: process.env.G2BULK_API_KEY },
+
+  // Not required at boot: the bot adapter checks these itself and refuses webhook calls
+  // cleanly if missing, rather than crashing the whole server before setup is finished.
+  messenger: {
+    verifyToken: process.env.MESSENGER_VERIFY_TOKEN,
+    pageAccessToken: process.env.MESSENGER_PAGE_ACCESS_TOKEN,
+    appSecret: process.env.MESSENGER_APP_SECRET,
+  },
 };
 
 export default env;

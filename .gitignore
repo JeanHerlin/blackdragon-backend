@@ -17,3 +17,7 @@ node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
+
+# locally stored uploaded product images (admin.json is the local admin account, same reasoning)
+uploads/
+data/admin.json

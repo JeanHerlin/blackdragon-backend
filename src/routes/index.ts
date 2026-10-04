@@ -9,6 +9,8 @@ import adminOrderRoutes from './adminOrderRoutes';
 import adminCatalogRoutes from './adminCatalogRoutes';
 import adminSettingsRoutes from './adminSettingsRoutes';
 import adminCategoryRoutes from './adminCategoryRoutes';
+import adminUploadRoutes from './adminUploadRoutes';
+import messengerRoutes from '../adapters/messenger/messengerRoutes';
 import * as adminStatsController from '../controllers/adminStatsController';
 
 const router = express.Router();
@@ -19,11 +21,13 @@ router.use('/admin/auth', adminAuthRoutes);
 router.use('/catalog', catalogRoutes);
 router.use('/orders', orderRoutes);
 router.use('/public', publicRoutes);
+router.use('/webhooks/messenger', messengerRoutes);
 
 router.use('/admin/orders', authenticate, adminOrderRoutes);
 router.use('/admin/products', authenticate, adminCatalogRoutes);
 router.use('/admin/settings', authenticate, adminSettingsRoutes);
 router.use('/admin/catalog', authenticate, adminCategoryRoutes);
+router.use('/admin/uploads', authenticate, adminUploadRoutes);
 router.get('/admin/stats', authenticate, adminStatsController.getDashboardStats);
 
 export default router;

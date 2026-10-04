@@ -13,3 +13,11 @@ export const listProductsGrouped = asyncHandler(async (req, res) => {
 export const updatePrice = asyncHandler(async (req, res) => {
   res.json(await catalogService.updateProductPrice(req.params.id, req.body.salePrice));
 });
+
+export const listSupplierCatalog = asyncHandler(async (req, res) => {
+  res.json(await catalogService.listAllSupplierEntries((req.query.game as string) || 'free_fire'));
+});
+
+export const syncSupplierCatalog = asyncHandler(async (req, res) => {
+  res.json(await catalogService.syncSupplierCatalog((req.body.game as string) || 'free_fire'));
+});

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { Category } from '@prisma/client';
 import AppError from '../utils/AppError';
 import * as catalogRepository from '../repositories/catalogRepository';
+import * as g2bulkCatalogSyncService from './g2bulkCatalogSyncService';
 
 interface StockInput {
   stockMode: 'unlimited' | 'limited';
@@ -11,6 +12,7 @@ interface StockInput {
 interface CreateProductInput extends StockInput {
   catalogEntryId: string;
   label?: string;
+  productType?: string;
   salePrice: number;
   imageUrl?: string;
 }
@@ -43,7 +45,15 @@ export async function listCategories(gameCode: string) {
   return catalogRepository.listCategories(game.id);
 }
 
-export async function listProducts({ gameCode, categoryCode }: { gameCode: string; categoryCode?: string }) {
+export async function listProducts({
+  gameCode,
+  categoryCode,
+  productType,
+}: {
+  gameCode: string;
+  categoryCode?: string;
+  productType?: string;
+}) {
   const game = await catalogRepository.findGameByCode(gameCode);
   if (!game) throw new AppError('Game not found', 404);
 
@@ -54,7 +64,19 @@ export async function listProducts({ gameCode, categoryCode }: { gameCode: strin
     categoryId = category.id;
   }
 
-  return catalogRepository.listProducts({ gameId: game.id, categoryId });
+  return catalogRepository.listProducts({ gameId: game.id, categoryId, productType });
+}
+
+// Bot flow: pick a game -> pick a category (uid/compte) -> pick a type (recharge/
+// abonnement/...) -> browse that type's catalogue. This powers the third step.
+export async function listProductTypes({ gameCode, categoryCode }: { gameCode: string; categoryCode: string }) {
+  const game = await catalogRepository.findGameByCode(gameCode);
+  if (!game) throw new AppError('Game not found', 404);
+
+  const category = await catalogRepository.findCategoryByCode(game.id, categoryCode);
+  if (!category) throw new AppError('Category not found', 404);
+
+  return catalogRepository.listProductTypes(category.id);
 }
 
 export async function getProductOrThrow(productId: string) {
@@ -87,6 +109,26 @@ function assertValidStock({ stockMode, stockQty }: StockInput): void {
   if (stockMode === 'limited' && (!Number.isInteger(stockQty) || (stockQty as number) < 0)) {
     throw new AppError('stockQty must be a non-negative integer when stockMode is "limited"', 400);
   }
+}
+
+// Powers the "Packs g2bulk" tab: every synced entry across every region, each
+// annotated with the category codes that already turned it into a Product.
+export async function listAllSupplierEntries(gameCode: string) {
+  const game = await catalogRepository.findGameByCode(gameCode);
+  if (!game) throw new AppError('Game not found', 404);
+
+  const entries = await catalogRepository.listAllSupplierEntries(game.id);
+  return entries.map((entry) => ({
+    ...entry,
+    syncedCategories: entry.products.map((p) => p.category.code),
+  }));
+}
+
+export async function syncSupplierCatalog(gameCode: string) {
+  const game = await catalogRepository.findGameByCode(gameCode);
+  if (!game) throw new AppError('Game not found', 404);
+
+  return g2bulkCatalogSyncService.syncAllRegions(game.id);
 }
 
 export function listAvailableSupplierEntries({
@@ -123,7 +165,10 @@ export async function createProductFromCatalogEntry(category: Category, input: C
       gameId: category.gameId,
       categoryId: category.id,
       label: input.label || entry.name,
-      productType: entry.productType,
+      // g2bulk's own classification is only a default — the admin can list the exact
+      // same supplier entry under a different type per category (see the "Packs
+      // g2bulk" browser tab, which is where this override is actually offered).
+      productType: input.productType || entry.productType,
       // Scoped per category: the same g2bulk reference can legitimately back two
       // Products (one per category) at two different prices — see backoffice-ux skill.
       externalRef: `g2bulk-${category.code}-${entry.region}-${entry.supplierRef}`,
@@ -142,14 +187,13 @@ export async function createProductFromCatalogEntry(category: Category, input: C
   }
 }
 
-// "Achat par compte" products aren't fulfilled through g2bulk's API at all (a human logs
-// into the customer's account by hand), so there's no supplier catalogue to pick from —
-// the admin enters cost/description themselves instead of being structurally prevented
-// from typing them, the way the UID flow above prevents it.
+// For products with no real g2bulk catalogue entry behind them at all (confirmed against
+// g2bulk's real API: it only ever carries plain diamond recharges and a handful of named
+// subscriptions — never level-up packs or airdrops) — the admin enters cost/description
+// themselves instead of being structurally prevented from typing them, the way the
+// g2bulk-picker flow above prevents it. Valid for any category, "uid" included: UID
+// subscription packs are just as manual/unverified as compte ones in reality.
 export async function createManualProduct(category: Category, input: CreateManualProductInput) {
-  if (!category.requiresAccountCredentials) {
-    throw new AppError('Manual product creation is only available for account-based categories', 400);
-  }
   if (!input.productType || typeof input.productType !== 'string') {
     throw new AppError('productType is required', 400);
   }
