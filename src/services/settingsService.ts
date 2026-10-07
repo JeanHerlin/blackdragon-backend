@@ -1,8 +1,17 @@
 import AppError from '../utils/AppError';
 import * as settingsRepository from '../repositories/settingsRepository';
+import * as orderRepository from '../repositories/orderRepository';
 
-export function getSettings() {
-  return settingsRepository.getSettings();
+// Merges in the PWA badge's notification counts so the frontend's single settings poll
+// (already hitting every admin page via DashboardHeader) can drive both the admin
+// toggle and the app icon badge, without a second endpoint.
+export async function getSettings() {
+  const [settings, pendingCompteAttention, uidDeliveryFailed] = await Promise.all([
+    settingsRepository.getSettings(),
+    orderRepository.countNeedsAttention('compte'),
+    orderRepository.countUidDeliveryFailed(),
+  ]);
+  return { ...settings, pendingCompteAttention, uidDeliveryFailed };
 }
 
 export function updateUsdToArRate(rate: number) {

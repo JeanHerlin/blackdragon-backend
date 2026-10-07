@@ -17,6 +17,16 @@ interface CreateProductInput extends StockInput {
   imageUrl?: string;
 }
 
+interface CreateBundleProductInput extends StockInput {
+  label: string;
+  productType?: string;
+  salePrice: number;
+  imageUrl?: string;
+  // One row per distinct entry, quantity carrying any repeats ("same pack twice + others")
+  // — never duplicate entries in this array, that's what quantity is for.
+  items: { catalogEntryId: string; quantity: number }[];
+}
+
 interface CreateManualProductInput extends StockInput {
   productType: string;
   label: string;
@@ -187,6 +197,57 @@ export async function createProductFromCatalogEntry(category: Category, input: C
   }
 }
 
+// Combines several real g2bulk catalogue entries into one product the customer sees as
+// a single pack (e.g. 110+250+500 diamonds shown as "860 Diamants") — the admin names it
+// and sets its price; delivery still calls g2bulk once per component (see
+// orderService.resolveDeliveryComponents). UID-only: "compte" delivery is manual
+// regardless of how many components, so the bundle machinery has nothing to add there.
+export async function createBundleProduct(category: Category, input: CreateBundleProductInput) {
+  if (category.requiresAccountCredentials) {
+    throw new AppError('Les produits combinés ne sont disponibles que pour les catégories à livraison automatique (UID)', 400);
+  }
+  if (!input.label || typeof input.label !== 'string') throw new AppError('label is required', 400);
+  if (typeof input.salePrice !== 'number' || input.salePrice <= 0) throw new AppError('salePrice must be a positive number', 400);
+  assertValidStock(input);
+
+  const items = input.items || [];
+  const ids = items.map((i) => i.catalogEntryId);
+  if (new Set(ids).size !== ids.length) throw new AppError('Chaque pack ne doit apparaître qu\'une fois — utilise sa quantité pour le répéter', 400);
+
+  for (const item of items) {
+    if (!Number.isInteger(item.quantity) || item.quantity < 1) throw new AppError('quantity must be a positive integer', 400);
+  }
+
+  const totalUnits = items.reduce((sum, i) => sum + i.quantity, 0);
+  if (totalUnits < 2) throw new AppError('Un produit combiné nécessite au moins 2 unités au total (ex: un même pack x2, ou 2 packs distincts)', 400);
+
+  const entries = await Promise.all(items.map((i) => catalogRepository.findSupplierCatalogEntryById(i.catalogEntryId)));
+  entries.forEach((entry, i) => {
+    if (!entry || entry.gameId !== category.gameId) throw new AppError(`Supplier catalog entry not found: ${ids[i]}`, 404);
+  });
+
+  const basePriceUsd = entries.reduce((sum, entry, i) => sum + entry!.basePriceUsd * items[i].quantity, 0);
+
+  return catalogRepository.createBundleProduct(
+    {
+      gameId: category.gameId,
+      categoryId: category.id,
+      label: input.label,
+      productType: input.productType || 'recharge',
+      externalRef: `bundle-${category.code}-${crypto.randomUUID()}`,
+      basePriceUsd,
+      salePrice: input.salePrice,
+      imageUrl: input.imageUrl || null,
+      stockMode: input.stockMode,
+      stockQty: input.stockMode === 'limited' ? (input.stockQty as number) : 0,
+      deliveryMode: 'auto_g2bulk',
+      sourceCatalogEntryId: null,
+      isActive: true,
+    },
+    items.map((item, sortOrder) => ({ catalogEntryId: item.catalogEntryId, quantity: item.quantity, sortOrder })),
+  );
+}
+
 // For products with no real g2bulk catalogue entry behind them at all (confirmed against
 // g2bulk's real API: it only ever carries plain diamond recharges and a handful of named
 // subscriptions — never level-up packs or airdrops) — the admin enters cost/description
@@ -253,4 +314,44 @@ export async function updateProduct(productId: string, input: UpdateProductInput
     isActive: input.isActive ?? true,
     ...(basePriceUsd !== undefined ? { basePriceUsd } : {}),
   });
+}
+
+// A product with order history is never hard-deleted — that history (and the promo
+// discounts recorded against it) must stay queryable forever. Deactivating it
+// (isActive=false, via updateProduct) is the right move for a product that's done.
+export async function deleteProduct(productId: string) {
+  const product = await catalogRepository.findProductById(productId);
+  if (!product) throw new AppError('Product not found', 404);
+
+  const orderCount = await catalogRepository.countOrdersForProduct(productId);
+  if (orderCount > 0) {
+    throw new AppError(
+      'Ce produit a déjà des commandes — désactive-le au lieu de le supprimer pour garder son historique intact',
+      409,
+    );
+  }
+
+  return catalogRepository.deleteProduct(productId);
+}
+
+// Removing a component re-sums basePriceUsd from what's left, so the margin display
+// stays accurate — the admin set the sale price by hand, so that one's untouched.
+export async function removeBundleItem(productId: string, bundleItemId: string) {
+  const product = await catalogRepository.findProductWithBundleItems(productId);
+  if (!product || !product.isBundle) throw new AppError('Produit combiné introuvable', 404);
+
+  const item = product.bundleItems.find((i) => i.id === bundleItemId);
+  if (!item) throw new AppError('Composant introuvable dans ce produit combiné', 404);
+
+  if (product.bundleItems.length <= 1) {
+    throw new AppError('Un produit combiné doit garder au moins un composant — supprime le produit entier si besoin', 400);
+  }
+
+  await catalogRepository.deleteBundleItem(bundleItemId);
+
+  const newBasePriceUsd = product.bundleItems
+    .filter((i) => i.id !== bundleItemId)
+    .reduce((sum, i) => sum + i.catalogEntry.basePriceUsd * i.quantity, 0);
+
+  return catalogRepository.updateProduct(productId, { basePriceUsd: newBasePriceUsd });
 }

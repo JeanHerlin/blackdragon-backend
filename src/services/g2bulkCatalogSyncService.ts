@@ -38,11 +38,19 @@ async function fetchFreeFireRegions(): Promise<G2BulkGame[]> {
   return body.games.filter((g) => g.code.startsWith('freefire_'));
 }
 
-async function fetchCatalogue(code: string): Promise<G2BulkCatalogueItem[]> {
-  const res = await fetch(`${BASE_URL}/games/${code}/catalogue`);
-  if (!res.ok) return []; // a region g2bulk can't currently serve shouldn't fail the whole sync
-  const body = (await res.json()) as { catalogues: G2BulkCatalogueItem[] };
-  return body.catalogues;
+// Distinguishes "g2bulk has nothing here right now" (a real, successful empty answer)
+// from "we couldn't reach/read this region" (a transient hiccup) — only the former
+// should ever flip existing entries to unavailable; the latter must leave them alone,
+// or a flaky request would wrongly mark real products as gone.
+async function fetchCatalogue(code: string): Promise<{ success: boolean; items: G2BulkCatalogueItem[] }> {
+  try {
+    const res = await fetch(`${BASE_URL}/games/${code}/catalogue`);
+    if (!res.ok) return { success: false, items: [] };
+    const body = (await res.json()) as { catalogues: G2BulkCatalogueItem[] };
+    return { success: true, items: body.catalogues };
+  } catch {
+    return { success: false, items: [] };
+  }
 }
 
 export async function syncAllRegions(gameId: string) {
@@ -51,8 +59,12 @@ export async function syncAllRegions(gameId: string) {
   let entryCount = 0;
 
   for (const region of regions) {
-    const items = await fetchCatalogue(region.code);
-    if (items.length === 0) continue;
+    const { success, items } = await fetchCatalogue(region.code);
+    if (!success) continue;
+
+    // Reset first, then every entry actually seen below gets flipped back to available
+    // by upsertSupplierCatalogEntry — whatever's left false is genuinely no longer offered.
+    await catalogRepository.markRegionUnavailable(gameId, region.code);
 
     for (const item of items) {
       await catalogRepository.upsertSupplierCatalogEntry({

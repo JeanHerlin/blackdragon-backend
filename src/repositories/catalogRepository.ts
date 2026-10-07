@@ -77,9 +77,15 @@ export function upsertSupplierCatalogEntry(data: {
 }) {
   return prisma.supplierCatalogEntry.upsert({
     where: { supplier_region_supplierRef: { supplier: data.supplier, region: data.region, supplierRef: data.supplierRef } },
-    update: { name: data.name, basePriceUsd: data.basePriceUsd },
+    update: { name: data.name, basePriceUsd: data.basePriceUsd, isAvailable: true },
     create: data,
   });
+}
+
+// Called before re-upserting a region's fresh catalogue — whatever doesn't get flipped
+// back to true in this same sync run genuinely isn't offered by g2bulk any more.
+export function markRegionUnavailable(gameId: string, region: string) {
+  return prisma.supplierCatalogEntry.updateMany({ where: { gameId, region }, data: { isAvailable: false } });
 }
 
 // Public-facing shape only — never basePriceUsd (our cost), externalRef, deliveryMode or
@@ -143,8 +149,36 @@ export function createProduct(data: Prisma.ProductUncheckedCreateInput) {
   return prisma.product.create({ data });
 }
 
+// Bundle items are created in the same transaction as the Product — never a Product
+// with isBundle=true but zero components, which would have nothing for delivery to do.
+export function createBundleProduct(
+  data: Prisma.ProductUncheckedCreateInput,
+  items: { catalogEntryId: string; quantity: number; sortOrder: number }[],
+) {
+  return prisma.product.create({
+    data: { ...data, isBundle: true, bundleItems: { create: items } },
+    include: { bundleItems: { include: { catalogEntry: true } } },
+  });
+}
+
 export function updateProduct(id: string, data: Prisma.ProductUpdateInput) {
   return prisma.product.update({ where: { id }, data });
+}
+
+export function countOrdersForProduct(productId: string) {
+  return prisma.order.count({ where: { productId } });
+}
+
+export function deleteProduct(id: string) {
+  return prisma.product.delete({ where: { id } });
+}
+
+export function findProductWithBundleItems(id: string) {
+  return prisma.product.findUnique({ where: { id }, include: { bundleItems: { include: { catalogEntry: true } } } });
+}
+
+export function deleteBundleItem(id: string) {
+  return prisma.productBundleItem.delete({ where: { id } });
 }
 
 // Grouped by category for the backoffice, per backoffice-ux skill — never a flat list,
@@ -152,7 +186,10 @@ export function updateProduct(id: string, data: Prisma.ProductUpdateInput) {
 export async function listAllProductsGroupedByCategory() {
   const categories = await prisma.category.findMany({
     include: {
-      products: { orderBy: { label: 'asc' }, include: { sourceCatalogEntry: true } },
+      products: {
+        orderBy: { label: 'asc' },
+        include: { sourceCatalogEntry: true, bundleItems: { include: { catalogEntry: true }, orderBy: { sortOrder: 'asc' } } },
+      },
       game: true,
     },
   });

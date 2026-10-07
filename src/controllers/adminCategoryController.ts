@@ -26,6 +26,11 @@ export const createProduct = asyncHandler(async (req, res) => {
   res.status(201).json(await catalogService.createProductFromCatalogEntry(category, req.body));
 });
 
+export const createBundleProduct = asyncHandler(async (req, res) => {
+  const category = await catalogService.getCategoryByCode(req.params.categoryCode);
+  res.status(201).json(await catalogService.createBundleProduct(category, req.body));
+});
+
 export const createManualProduct = asyncHandler(async (req, res) => {
   const category = await catalogService.getCategoryByCode(req.params.categoryCode);
   res.status(201).json(await catalogService.createManualProduct(category, req.body));
@@ -33,4 +38,13 @@ export const createManualProduct = asyncHandler(async (req, res) => {
 
 export const updateProduct = asyncHandler(async (req, res) => {
   res.json(await catalogService.updateProduct(req.params.productId, req.body));
+});
+
+export const deleteProduct = asyncHandler(async (req, res) => {
+  await catalogService.deleteProduct(req.params.productId);
+  res.json({ ok: true });
+});
+
+export const removeBundleItem = asyncHandler(async (req, res) => {
+  res.json(await catalogService.removeBundleItem(req.params.productId, req.params.bundleItemId));
 });

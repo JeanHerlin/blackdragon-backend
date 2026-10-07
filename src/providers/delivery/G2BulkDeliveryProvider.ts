@@ -31,11 +31,13 @@ export default class G2BulkDeliveryProvider extends DeliveryProvider {
     return { pseudo: data.pseudo };
   }
 
-  async deliverTopUp({ uid, product }: DeliverTopUpInput): Promise<DeliverTopUpResult> {
+  async deliverTopUp({ uid, supplierRef }: DeliverTopUpInput): Promise<DeliverTopUpResult> {
+    // supplierRef is g2bulk's own raw catalogue id (SupplierCatalogEntry.supplierRef) —
+    // never our internal Product.externalRef, which g2bulk has no way to recognize.
     const response = await fetch(`${BASE_URL}/games/free_fire/order`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
-      body: JSON.stringify({ uid, productRef: product.externalRef }),
+      body: JSON.stringify({ uid, productRef: supplierRef }),
     });
 
     if (!response.ok) {

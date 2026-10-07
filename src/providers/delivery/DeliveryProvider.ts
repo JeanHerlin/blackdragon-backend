@@ -1,5 +1,3 @@
-import type { Product } from '@prisma/client';
-
 export interface VerifyPlayerInput {
   gameCode?: string;
   uid: string;
@@ -9,10 +7,14 @@ export interface VerifyPlayerResult {
   pseudo: string;
 }
 
+// One call = one g2bulk catalogue entry delivered — a bundle product calls this once
+// per component (see orderService.resolveDeliveryComponents), a normal product once.
+// Takes the raw supplierRef directly rather than a Product, since a bundle has no
+// single product-level reference to hand over.
 export interface DeliverTopUpInput {
   gameCode?: string;
   uid: string;
-  product: Product;
+  supplierRef: string;
 }
 
 export interface DeliverTopUpResult {

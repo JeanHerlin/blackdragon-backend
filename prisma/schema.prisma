@@ -61,6 +61,57 @@ model Product {
   sourceCatalogEntryId  String?
   sourceCatalogEntry    SupplierCatalogEntry? @relation(fields: [sourceCatalogEntryId], references: [id])
   orders                Order[]
+  promoCodeAttachments  PromoCodeProduct[]
+  // A bundle has no single sourceCatalogEntry — it's several g2bulk entries delivered
+  // as one sale (e.g. 110+250+500 diamonds shown to the customer as "860 Diamants").
+  // The admin sets the combined label/price by hand; basePriceUsd is still the real sum
+  // of the components' cost, so margin display keeps working unchanged.
+  isBundle              Boolean               @default(false)
+  bundleItems           ProductBundleItem[]
+}
+
+// Each row is one g2bulk catalogue entry that makes up a bundle product — delivery
+// walks this list and calls g2bulk once per unit of quantity (see
+// orderService.resolveDeliveryComponents), so "same pack twice" is one row with
+// quantity=2, not two separate rows for the same entry.
+model ProductBundleItem {
+  id             String               @id @default(uuid())
+  productId      String
+  product        Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  catalogEntryId String
+  catalogEntry   SupplierCatalogEntry @relation(fields: [catalogEntryId], references: [id])
+  quantity       Int                  @default(1)
+  sortOrder      Int                  @default(0)
+
+  @@unique([productId, catalogEntryId])
+}
+
+// A code is one row; each product it applies to gets its own discount via
+// PromoCodeProduct — same code can sit on several products at different discounts,
+// per the client's requirement ("le même code peut être appliqué à plusieurs produits,
+// mais la remise se définit à l'attache, pas sur le code lui-même").
+model PromoCode {
+  id        String             @id @default(uuid())
+  code      String             @unique
+  // Human-readable name shown next to the code everywhere in the admin ("FFNOEL10" /
+  // "Promo Noël -10%") — purely for the admin's own memory, never shown to the customer.
+  title     String
+  isActive  Boolean            @default(true)
+  createdAt DateTime           @default(now())
+  products  PromoCodeProduct[]
+}
+
+model PromoCodeProduct {
+  id            String    @id @default(uuid())
+  promoCodeId   String
+  promoCode     PromoCode @relation(fields: [promoCodeId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  discountType  String // percent | fixed — fixed is a flat Ar amount
+  discountValue Float
+  createdAt     DateTime  @default(now())
+
+  @@unique([promoCodeId, productId])
 }
 
 // A snapshot of what g2bulk actually offers, fetched from their public catalogue API
@@ -78,8 +129,14 @@ model SupplierCatalogEntry {
   name         String // g2bulk's raw name — shown to the admin as the product description
   basePriceUsd Float
   productType  String // recharge | abonnement
+  // Set false when a sync no longer sees this entry in g2bulk's live catalogue for its
+  // region — the admin never has to guess, every Product/bundle component built on it
+  // surfaces as unavailable automatically (see g2bulkCatalogSyncService).
+  isAvailable  Boolean   @default(true)
   fetchedAt    DateTime  @default(now())
   products     Product[]
+  bundleItems  ProductBundleItem[]
+  deliveryItems DeliveryItem[]
 
   @@unique([supplier, region, supplierRef])
 }
@@ -93,6 +150,10 @@ model Order {
   purchaseType      String // uid | compte
   targetUid         String?
   amount            Float
+  // Snapshot, not a relation to PromoCodeProduct — an order's history must survive the
+  // admin later detaching or deleting that code from the product (see promoCodeService).
+  promoCodeUsed     String?
+  discountAr        Float              @default(0)
   status            String             @default("pending_payment")
   // Admin-entered reason, set alongside status by reject/flag-issue, cleared on resolve.
   adminNote         String?
@@ -123,6 +184,25 @@ model Delivery {
   attempts    Int       @default(0)
   lastError   String?
   deliveredAt DateTime?
+  // One row per g2bulk call this delivery actually needs — 1 for a normal product, N
+  // for a bundle. Lets the admin see exactly which component failed when the rest went
+  // through, and lets a retry skip the ones already marked "success" (never re-deliver
+  // diamonds the customer already received).
+  items       DeliveryItem[]
+}
+
+model DeliveryItem {
+  id             String    @id @default(uuid())
+  deliveryId     String
+  delivery       Delivery  @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  catalogEntryId String
+  catalogEntry   SupplierCatalogEntry @relation(fields: [catalogEntryId], references: [id])
+  // Snapshot of the entry's name at delivery time — survives the entry being renamed or
+  // re-synced later, so this order's history stays legible regardless.
+  label          String
+  status         String    @default("pending") // pending | success | failed
+  lastError      String?
+  deliveredAt    DateTime?
 }
 
 model AccountCredential {
@@ -166,4 +246,14 @@ model ConversationState {
   step      String   @default("start")
   data      Json     @default("{}")
   updatedAt DateTime @updatedAt
+}
+
+// One admin, potentially several browsers/devices — each Web Push subscription
+// (one per browser install) gets its own row so a push fans out to all of them.
+model PushSubscription {
+  id        String   @id @default(uuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
 }

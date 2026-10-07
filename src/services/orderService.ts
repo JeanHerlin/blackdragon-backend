@@ -6,6 +6,7 @@ import * as orderRepository from '../repositories/orderRepository';
 import * as catalogService from './catalogService';
 import * as notificationService from './notificationService';
 import * as settingsService from './settingsService';
+import * as promoCodeService from './promoCodeService';
 import paymentProvider from '../providers/payment';
 import deliveryProvider from '../providers/delivery';
 import { generateRawToken, hashToken } from '../utils/secureToken';
@@ -13,18 +14,20 @@ import { generateRawToken, hashToken } from '../utils/secureToken';
 const CREDENTIAL_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 type OrderWithRelations = NonNullable<Awaited<ReturnType<typeof orderRepository.findById>>>;
-type ProductWithCategory = Awaited<ReturnType<typeof catalogService.getProductOrThrow>>;
+type DeliverableProduct = OrderWithRelations['product'];
 
 export async function createOrder({
   productId,
   targetUid,
   customerRef,
   channel,
+  promoCode,
 }: {
   productId: string;
   targetUid?: string;
   customerRef?: string;
   channel?: string;
+  promoCode?: string;
 }) {
   const product = await catalogService.getProductOrThrow(productId);
 
@@ -39,13 +42,19 @@ export async function createOrder({
     throw new AppError('targetUid is required', 400);
   }
 
+  // Not mandatory — resolveDiscount passes through at full price when promoCode is
+  // undefined, and only throws if a code WAS given but doesn't apply to this product.
+  const { promoCodeUsed, discountAr, finalAmount } = await promoCodeService.resolveDiscount(promoCode, product.id, product.salePrice);
+
   const order = await orderRepository.createOrder({
     channel: channel || 'dev',
     customerRef: customerRef || 'anonymous',
     productId: product.id,
     purchaseType: product.category.requiresAccountCredentials ? 'compte' : 'uid',
     targetUid,
-    amount: product.salePrice,
+    amount: finalAmount,
+    promoCodeUsed,
+    discountAr,
     status: 'pending_payment',
   });
 
@@ -54,7 +63,7 @@ export async function createOrder({
 
   const { paymentLink } = await paymentProvider.createPaymentLink({
     reference: providerRef,
-    amount: product.salePrice,
+    amount: finalAmount,
     description: product.label,
     clientName: customerRef,
   });
@@ -114,35 +123,69 @@ async function handlePaymentSuccess(order: OrderWithRelations) {
     return { status: 'manual_pending', deliverLink: `${env.frontendUrl}/deliver/${rawToken}` };
   }
 
-  await orderRepository.createDelivery(order.id, { mode: 'auto_g2bulk', status: 'pending' });
+  const delivery = await orderRepository.createDelivery(order.id, { mode: 'auto_g2bulk', status: 'pending' });
+  const components = resolveDeliveryComponents(product);
+  await orderRepository.createDeliveryItems(delivery.id, components.map(({ catalogEntryId, label }) => ({ catalogEntryId, label })));
   await orderRepository.updateStatus(order.id, 'delivering');
-  return runAutoDelivery(order.id, product as ProductWithCategory);
+  return runAutoDelivery(order.id);
 }
 
-async function runAutoDelivery(orderId: string, product: ProductWithCategory) {
-  const order = await orderRepository.findById(orderId);
+// A normal product is one component; a bundle is one per unit of quantity across its
+// ProductBundleItems (see catalogService.createBundleProduct) — a repeated pack
+// ("same pack x2") becomes two separate delivery calls, each tracked on its own so a
+// partial failure says exactly which unit didn't go through, not just which pack.
+function resolveDeliveryComponents(product: DeliverableProduct): { catalogEntryId: string; supplierRef: string; label: string }[] {
+  if (product.isBundle) {
+    return product.bundleItems.flatMap((item) =>
+      Array.from({ length: item.quantity }, (_, i) => ({
+        catalogEntryId: item.catalogEntryId,
+        supplierRef: item.catalogEntry.supplierRef,
+        label: item.quantity > 1 ? `${item.catalogEntry.name} (${i + 1}/${item.quantity})` : item.catalogEntry.name,
+      })),
+    );
+  }
 
-  try {
-    await deliveryProvider.deliverTopUp({ uid: order!.targetUid as string, product });
-    await orderRepository.updateDelivery(orderId, {
-      status: 'success',
-      deliveredAt: new Date(),
-      attempts: { increment: 1 },
-    });
+  if (!product.sourceCatalogEntry) {
+    throw new AppError('Ce produit auto_g2bulk n\'a pas de référence fournisseur valide', 500);
+  }
+  return [{ catalogEntryId: product.sourceCatalogEntry.id, supplierRef: product.sourceCatalogEntry.supplierRef, label: product.label }];
+}
+
+// Only (re)attempts items not already "success" — a retry after a partial bundle
+// failure never re-delivers the components the customer already received.
+async function runAutoDelivery(orderId: string) {
+  const order = await orderRepository.findById(orderId);
+  const items = order!.delivery!.items;
+
+  for (const item of items) {
+    if (item.status === 'success') continue;
+    try {
+      await deliveryProvider.deliverTopUp({ uid: order!.targetUid as string, supplierRef: item.catalogEntry.supplierRef });
+      await orderRepository.updateDeliveryItem(item.id, { status: 'success', deliveredAt: new Date(), lastError: null });
+    } catch (err: any) {
+      await orderRepository.updateDeliveryItem(item.id, { status: 'failed', lastError: err.message });
+    }
+  }
+
+  const fresh = await orderRepository.findById(orderId);
+  const freshItems = fresh!.delivery!.items;
+  const failed = freshItems.filter((i) => i.status !== 'success');
+
+  if (failed.length === 0) {
+    await orderRepository.updateDelivery(orderId, { status: 'success', deliveredAt: new Date(), attempts: { increment: 1 } });
     await orderRepository.updateStatus(orderId, 'delivered');
     return { status: 'delivered' };
-  } catch (err: any) {
-    await orderRepository.updateDelivery(orderId, {
-      status: 'failed',
-      lastError: err.message,
-      attempts: { increment: 1 },
-    });
-    await orderRepository.updateStatus(orderId, 'delivery_failed');
-
-    const fresh = await orderRepository.findById(orderId);
-    await notificationService.notify('delivery_failed', fresh!);
-    return { status: 'delivery_failed', error: err.message };
   }
+
+  const failedLabels = failed.map((i) => i.label);
+  await orderRepository.updateDelivery(orderId, {
+    status: 'failed',
+    lastError: `Échec: ${failedLabels.join(', ')}`,
+    attempts: { increment: 1 },
+  });
+  await orderRepository.updateStatus(orderId, 'delivery_failed');
+  await notificationService.notify('delivery_failed', fresh!);
+  return { status: 'delivery_failed', failedItems: failedLabels };
 }
 
 export async function retryDelivery(orderId: string) {
@@ -153,7 +196,7 @@ export async function retryDelivery(orderId: string) {
   }
 
   await orderRepository.updateStatus(orderId, 'delivering');
-  return runAutoDelivery(orderId, order.product as ProductWithCategory);
+  return runAutoDelivery(orderId);
 }
 
 export async function markManualDelivered(orderId: string) {

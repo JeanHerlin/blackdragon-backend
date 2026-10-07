@@ -42,6 +42,14 @@ const env = {
     pageAccessToken: process.env.MESSENGER_PAGE_ACCESS_TOKEN,
     appSecret: process.env.MESSENGER_APP_SECRET,
   },
+
+  // Not required at boot: pushService checks these itself and skips sending (logs once)
+  // rather than crashing the server if a dev environment hasn't generated a VAPID pair yet.
+  vapid: {
+    publicKey: process.env.VAPID_PUBLIC_KEY,
+    privateKey: process.env.VAPID_PRIVATE_KEY,
+    subject: process.env.VAPID_SUBJECT,
+  },
 };
 
 export default env;
