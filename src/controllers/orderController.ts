@@ -2,9 +2,15 @@ import asyncHandler from '../utils/asyncHandler';
 import * as orderService from '../services/orderService';
 
 export const createOrder = asyncHandler(async (req, res) => {
-  const { productId, targetUid, customerRef, channel, promoCode } = req.body;
-  const { order, paymentLink } = await orderService.createOrder({ productId, targetUid, customerRef, channel, promoCode });
-  res.status(201).json({ orderId: order.id, status: order.status, paymentLink, discountAr: order.discountAr });
+  const { productId, targetUid, customerRef, channel, promoCode, paymentMethod } = req.body;
+  const result = await orderService.createOrder({ productId, targetUid, customerRef, channel, promoCode, paymentMethod });
+  res.status(201).json({
+    orderId: result.order.id,
+    status: result.order.status,
+    discountAr: result.order.discountAr,
+    paymentLink: result.paymentMethod === 'papi' ? result.paymentLink : undefined,
+    proofSubmitLink: result.paymentMethod === 'cashpoint' ? result.proofSubmitLink : undefined,
+  });
 });
 
 export const getOrder = asyncHandler(async (req, res) => {

@@ -6,12 +6,13 @@ import * as orderRepository from '../repositories/orderRepository';
 // (already hitting every admin page via DashboardHeader) can drive both the admin
 // toggle and the app icon badge, without a second endpoint.
 export async function getSettings() {
-  const [settings, pendingCompteAttention, uidDeliveryFailed] = await Promise.all([
+  const [settings, pendingCompteAttention, uidDeliveryFailed, uidCashpointPending] = await Promise.all([
     settingsRepository.getSettings(),
     orderRepository.countNeedsAttention('compte'),
     orderRepository.countUidDeliveryFailed(),
+    orderRepository.countUidCashpointProofPending(),
   ]);
-  return { ...settings, pendingCompteAttention, uidDeliveryFailed };
+  return { ...settings, pendingCompteAttention, uidDeliveryFailed, uidCashpointPending };
 }
 
 export function updateUsdToArRate(rate: number) {

@@ -27,8 +27,8 @@ export default class G2BulkDeliveryProvider extends DeliveryProvider {
     if (!response.ok) {
       throw new AppError('Player not found for this UID', 404);
     }
-    const data = (await response.json()) as { pseudo: string };
-    return { pseudo: data.pseudo };
+    const data = (await response.json()) as { pseudo: string; region?: string; level?: string | number };
+    return { pseudo: data.pseudo, region: data.region, level: data.level };
   }
 
   async deliverTopUp({ uid, supplierRef }: DeliverTopUpInput): Promise<DeliverTopUpResult> {

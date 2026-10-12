@@ -9,5 +9,7 @@ router.delete('/:id', controller.remove);
 router.patch('/:id/active', controller.setActive);
 router.post('/:id/products', controller.attach);
 router.delete('/:id/products/:productId', controller.detach);
+router.post('/:id/products/all', controller.attachAll);
+router.delete('/:id/products', controller.detachAll);
 
 export default router;

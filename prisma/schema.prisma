@@ -145,6 +145,10 @@ model Order {
   id                String             @id @default(uuid())
   channel           String             @default("dev")
   customerRef       String
+  // Set only for channel="messenger" — lets the admin's actions (flag issue, reject,
+  // reject cashpoint proof) message the customer back. Null for any other channel,
+  // since there's nowhere to send a message for those.
+  messengerPsid     String?
   productId         String
   product           Product            @relation(fields: [productId], references: [id])
   purchaseType      String // uid | compte
@@ -163,16 +167,40 @@ model Order {
   delivery          Delivery?
   accountCredential AccountCredential?
   credentialToken   CredentialToken?
+  paymentProofToken PaymentProofToken?
 }
 
 model Payment {
   id          String   @id @default(uuid())
   orderId     String   @unique
   order       Order    @relation(fields: [orderId], references: [id])
-  provider    String   @default("papi")
+  provider    String   @default("papi") // papi | cashpoint
   providerRef String   @unique
+  // papi: pending -> success | failed (via webhook, automatic).
+  // cashpoint: awaiting_proof -> proof_submitted -> confirmed | rejected (admin reviews
+  // by hand — there's no automated callback for a cash deposit, see paymentProofService).
   status      String   @default("pending")
+  // papi-only — returned by the create-payment-link call, re-checked against the webhook
+  // payload before trusting it (see papiWebhookController): a forged "SUCCESS" callback
+  // without the matching token must never mark an order paid.
+  notificationToken String?
+  // Cashpoint-only proof the customer submits — null for papi payments.
+  senderPhone   String?
+  reference     String?
+  proofImageUrl String?
   createdAt   DateTime @default(now())
+}
+
+// Mirrors CredentialToken's pattern (single-use, time-limited link) but for a cashpoint
+// deposit's proof-submission page instead of a compte's login form.
+model PaymentProofToken {
+  id        String    @id @default(uuid())
+  orderId   String    @unique
+  order     Order     @relation(fields: [orderId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 }
 
 model Delivery {
@@ -209,6 +237,9 @@ model AccountCredential {
   id                String    @id @default(uuid())
   orderId           String    @unique
   order             Order     @relation(fields: [orderId], references: [id])
+  // Which login the customer is handing over — the admin needs this visible immediately
+  // (without even revealing the password) to know what kind of account they're signing into.
+  provider          String    @default("facebook") // facebook | google | twitter
   loginEncrypted    String
   passwordEncrypted String
   providedAt        DateTime  @default(now())

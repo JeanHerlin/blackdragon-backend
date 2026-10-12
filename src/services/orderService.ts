@@ -5,16 +5,50 @@ import AppError from '../utils/AppError';
 import * as orderRepository from '../repositories/orderRepository';
 import * as catalogService from './catalogService';
 import * as notificationService from './notificationService';
-import * as settingsService from './settingsService';
 import * as promoCodeService from './promoCodeService';
+import * as customerNotificationService from './customerNotificationService';
 import paymentProvider from '../providers/payment';
 import deliveryProvider from '../providers/delivery';
 import { generateRawToken, hashToken } from '../utils/secureToken';
 
 const CREDENTIAL_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const PAYMENT_PROOF_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 type OrderWithRelations = NonNullable<Awaited<ReturnType<typeof orderRepository.findById>>>;
 type DeliverableProduct = OrderWithRelations['product'];
+
+// Used by the Messenger bot to confirm a typed UID is real before asking the customer
+// to validate it ("c'est bien ton compte ?") — same g2bulk check for both "uid" and
+// "compte" purchases. For "compte" the UID is never used for delivery (that happens by
+// logging into the account the customer hands over later), it's stored purely as a
+// cross-check the admin can compare once they're actually inside the account.
+export async function verifyPlayer(targetUid: string) {
+  return deliveryProvider.verifyPlayer({ uid: targetUid });
+}
+
+// Customer-facing wording for "suivre ma commande" / "mes commandes" — deliberately
+// different from the admin's STATUS_SUBLABEL (frontend/lib/orders.ts): the customer
+// doesn't care about our internal pipeline names, just what's actually happening.
+const CUSTOMER_STATUS_LABELS: Record<string, string> = {
+  pending_payment: 'En attente de paiement',
+  paid: 'Paiement reçu, traitement en cours',
+  delivering: 'Livraison en cours',
+  payment_failed: 'Paiement échoué',
+  manual_pending: 'Paiement confirmé, traitement en cours',
+  credentials_received: 'Identifiants reçus, traitement en cours',
+  delivered: '✅ Livré',
+  delivery_failed: 'Livraison en échec — notre équipe s\'en occupe',
+  issue: '⚠️ Problème signalé — contacte-nous si besoin',
+  rejected: '❌ Commande refusée',
+};
+
+export function customerStatusLabel(status: string): string {
+  return CUSTOMER_STATUS_LABELS[status] || status;
+}
+
+export function listCustomerOrders(messengerPsid: string, limit = 5) {
+  return orderRepository.listByMessengerPsid(messengerPsid, limit);
+}
 
 export async function createOrder({
   productId,
@@ -22,23 +56,27 @@ export async function createOrder({
   customerRef,
   channel,
   promoCode,
+  paymentMethod,
+  messengerPsid,
 }: {
   productId: string;
   targetUid?: string;
   customerRef?: string;
   channel?: string;
   promoCode?: string;
+  paymentMethod?: 'papi' | 'cashpoint';
+  messengerPsid?: string;
 }) {
   const product = await catalogService.getProductOrThrow(productId);
 
-  if (product.category.requiresAccountCredentials) {
-    const settings = await settingsService.getSettings();
-    if (!settings.isAdminActive) {
-      throw new AppError('Les commandes par compte sont temporairement indisponibles', 503);
-    }
-  }
+  // Admin-inactive no longer blocks the order outright — the bot warns the customer
+  // about it before they pay (see conversationFlow's askPaymentMethod), and they can
+  // still choose to go through with it knowing delivery might take a bit longer.
 
-  if (!targetUid) {
+  // A "compte" order never has a target UID — delivery happens by logging into the
+  // customer's own account (credentials collected after payment, see startManualDelivery).
+  // Only "uid" orders (direct top-up) need one, since g2bulk delivers straight to it.
+  if (!product.category.requiresAccountCredentials && !targetUid) {
     throw new AppError('targetUid is required', 400);
   }
 
@@ -49,6 +87,7 @@ export async function createOrder({
   const order = await orderRepository.createOrder({
     channel: channel || 'dev',
     customerRef: customerRef || 'anonymous',
+    messengerPsid,
     productId: product.id,
     purchaseType: product.category.requiresAccountCredentials ? 'compte' : 'uid',
     targetUid,
@@ -58,17 +97,32 @@ export async function createOrder({
     status: 'pending_payment',
   });
 
-  const providerRef = crypto.randomUUID();
-  await orderRepository.createPayment(order.id, { provider: 'papi', providerRef, status: 'pending' });
+  if (paymentMethod === 'cashpoint') {
+    // No automated callback for a cash deposit — the customer submits proof themselves
+    // (sender phone, reference, screenshot) through a token-protected link, same pattern
+    // as the account-credential delivery link. See paymentProofService.
+    await orderRepository.createPayment(order.id, { provider: 'cashpoint', providerRef: crypto.randomUUID(), status: 'awaiting_proof' });
 
-  const { paymentLink } = await paymentProvider.createPaymentLink({
+    const rawToken = generateRawToken();
+    await orderRepository.createPaymentProofToken(order.id, {
+      tokenHash: hashToken(rawToken),
+      expiresAt: new Date(Date.now() + PAYMENT_PROOF_TOKEN_TTL_MS),
+    });
+
+    return { order, paymentMethod: 'cashpoint' as const, proofSubmitLink: `${env.frontendUrl}/pay-proof/${rawToken}` };
+  }
+
+  const providerRef = crypto.randomUUID();
+  const { paymentLink, notificationToken } = await paymentProvider.createPaymentLink({
     reference: providerRef,
     amount: finalAmount,
     description: product.label,
     clientName: customerRef,
   });
 
-  return { order, paymentLink };
+  await orderRepository.createPayment(order.id, { provider: 'papi', providerRef, status: 'pending', notificationToken });
+
+  return { order, paymentMethod: 'papi' as const, paymentLink };
 }
 
 export async function getPaymentContext(providerRef: string) {
@@ -99,32 +153,48 @@ export async function confirmPayment(providerRef: string, outcome: string) {
 
   await orderRepository.updatePaymentStatus(payment.orderId, 'success');
   const order = await orderRepository.updateStatus(payment.orderId, 'paid');
+
+  await customerNotificationService.notifyCustomer(order.messengerPsid, 'Paiement reçu ! On traite ta commande.');
+
   return handlePaymentSuccess(order);
 }
 
 async function handlePaymentSuccess(order: OrderWithRelations) {
-  const product = order.product;
-
-  if (product.category.requiresAccountCredentials) {
-    await orderRepository.createDelivery(order.id, { mode: 'manual', status: 'pending' });
-    await orderRepository.updateStatus(order.id, 'manual_pending');
-
-    const rawToken = generateRawToken();
-    await orderRepository.createCredentialToken(order.id, {
-      tokenHash: hashToken(rawToken),
-      expiresAt: new Date(Date.now() + CREDENTIAL_TOKEN_TTL_MS),
-    });
-
-    const fresh = await orderRepository.findById(order.id);
-    await notificationService.notify('manual_delivery_pending', fresh!);
-
-    // In production this link is sent to the customer via the Messenger bot, not returned
-    // here — but that adapter doesn't exist yet, so we surface it directly for testing.
-    return { status: 'manual_pending', deliverLink: `${env.frontendUrl}/deliver/${rawToken}` };
+  if (order.product.category.requiresAccountCredentials) {
+    return startManualDelivery(order);
   }
+  return startAutoDelivery(order);
+}
 
+// Triggers the "give us your login" step for a "compte" order. Called from two very
+// different moments on purpose: right after a papi payment actually succeeds (real
+// money confirmed), but for cashpoint right when the customer submits their deposit
+// proof — BEFORE the admin validates it (see paymentProofService.submitProof) — so the
+// customer isn't left waiting on the admin before they can hand over credentials.
+// The deliverLink is handed back to whichever web form the customer is already on
+// (the mock-pay page or the proof-submission page), which sends them straight to the
+// credentials form — no separate Messenger round-trip needed for this step.
+export async function startManualDelivery(order: OrderWithRelations) {
+  await orderRepository.createDelivery(order.id, { mode: 'manual', status: 'pending' });
+  await orderRepository.updateStatus(order.id, 'manual_pending');
+
+  const rawToken = generateRawToken();
+  await orderRepository.createCredentialToken(order.id, {
+    tokenHash: hashToken(rawToken),
+    expiresAt: new Date(Date.now() + CREDENTIAL_TOKEN_TTL_MS),
+  });
+
+  const fresh = await orderRepository.findById(order.id);
+  await notificationService.notify('manual_delivery_pending', fresh!);
+
+  return { status: 'manual_pending', deliverLink: `${env.frontendUrl}/deliver/${rawToken}` };
+}
+
+// Shared by the papi webhook path (fires immediately) and launchG2bulkDelivery (the
+// cashpoint admin's explicit button, deliberately NOT automatic — see that function).
+async function startAutoDelivery(order: OrderWithRelations) {
   const delivery = await orderRepository.createDelivery(order.id, { mode: 'auto_g2bulk', status: 'pending' });
-  const components = resolveDeliveryComponents(product);
+  const components = resolveDeliveryComponents(order.product);
   await orderRepository.createDeliveryItems(delivery.id, components.map(({ catalogEntryId, label }) => ({ catalogEntryId, label })));
   await orderRepository.updateStatus(order.id, 'delivering');
   return runAutoDelivery(order.id);
@@ -199,6 +269,61 @@ export async function retryDelivery(orderId: string) {
   return runAutoDelivery(orderId);
 }
 
+// Admin reviewed the cashpoint proof (sender phone, reference, screenshot) and confirms
+// the deposit really arrived. For "compte", the manual-delivery flow (credentials
+// requested from the customer) was already kicked off the moment the proof was
+// submitted — see paymentProofService.submitProof — so this only confirms the deposit
+// was real, it must not reset or re-trigger that flow. For "uid", it deliberately stops
+// at "paid": g2bulk delivery only starts when the admin clicks the separate
+// launchG2bulkDelivery button, since confirming a cash deposit and authorizing the
+// actual spend are two distinct decisions.
+export async function confirmCashpointPayment(orderId: string) {
+  const order = await orderRepository.findById(orderId);
+  if (!order) throw new AppError('Order not found', 404);
+  if (order.payment?.provider !== 'cashpoint' || order.payment.status !== 'proof_submitted') {
+    throw new AppError('This order has no cashpoint proof awaiting validation', 400);
+  }
+
+  await orderRepository.updatePayment(orderId, { status: 'confirmed' });
+
+  if (order.product.category.requiresAccountCredentials) {
+    return orderRepository.findById(orderId);
+  }
+
+  await orderRepository.updateStatus(orderId, 'paid');
+  return { status: 'paid' };
+}
+
+export async function rejectCashpointPayment(orderId: string, reason?: string) {
+  const order = await orderRepository.findById(orderId);
+  if (!order) throw new AppError('Order not found', 404);
+  if (order.payment?.provider !== 'cashpoint' || order.payment.status !== 'proof_submitted') {
+    throw new AppError('This order has no cashpoint proof awaiting validation', 400);
+  }
+
+  await orderRepository.updatePayment(orderId, { status: 'rejected' });
+  const result = await orderRepository.updateStatusAndNote(orderId, 'payment_failed', reason || 'Preuve de paiement Cashpoint refusée');
+
+  await customerNotificationService.notifyCustomer(
+    order.messengerPsid,
+    `Ta preuve de paiement Cashpoint pour la commande #${orderId.slice(0, 8)} a été refusée : ${reason || 'preuve invalide'}. Contacte-nous pour renvoyer une preuve correcte.`,
+  );
+
+  return result;
+}
+
+// The explicit "launch delivery" button for a confirmed cashpoint UID order — see
+// confirmCashpointPayment for why this doesn't happen automatically.
+export async function launchG2bulkDelivery(orderId: string) {
+  const order = await orderRepository.findById(orderId);
+  if (!order) throw new AppError('Order not found', 404);
+  if (order.status !== 'paid' || order.purchaseType !== 'uid') {
+    throw new AppError('Order is not a paid UID order awaiting delivery', 400);
+  }
+
+  return startAutoDelivery(order);
+}
+
 export async function markManualDelivered(orderId: string) {
   const order = await orderRepository.findById(orderId);
   if (!order) throw new AppError('Order not found', 404);
@@ -220,7 +345,14 @@ export async function rejectOrder(orderId: string, note?: string) {
   if (TERMINAL_STATUSES.includes(order.status)) {
     throw new AppError('Order is already in a final state', 400);
   }
-  return orderRepository.updateStatusAndNote(orderId, 'rejected', note || null);
+  const result = await orderRepository.updateStatusAndNote(orderId, 'rejected', note || null);
+
+  await customerNotificationService.notifyCustomer(
+    order.messengerPsid,
+    `Ta commande #${orderId.slice(0, 8)} a été refusée${note ? ` : ${note}` : '.'} Contacte-nous si tu as des questions.`,
+  );
+
+  return result;
 }
 
 // A separate state from the normal pipeline (not a sub-status of manual_pending/
@@ -233,7 +365,14 @@ export async function flagIssue(orderId: string, note: string) {
   if (TERMINAL_STATUSES.includes(order.status)) {
     throw new AppError('Order is already in a final state', 400);
   }
-  return orderRepository.updateStatusAndNote(orderId, 'issue', note);
+  const result = await orderRepository.updateStatusAndNote(orderId, 'issue', note);
+
+  await customerNotificationService.notifyCustomer(
+    order.messengerPsid,
+    `Il y a un souci avec ta commande #${orderId.slice(0, 8)} : ${note}. Réponds ici si tu as des questions.`,
+  );
+
+  return result;
 }
 
 export async function resolveIssue(orderId: string) {
@@ -248,12 +387,33 @@ export async function resolveIssue(orderId: string) {
   return orderRepository.updateStatusAndNote(orderId, nextStatus, null);
 }
 
-export function listOrders({ status, purchaseType }: { status?: string; purchaseType?: string } = {}) {
-  return orderRepository.listOrders({ status, purchaseType });
+export function listOrders({
+  status,
+  purchaseType,
+  paymentProvider,
+}: { status?: string; purchaseType?: string; paymentProvider?: string } = {}) {
+  return orderRepository.listOrders({ status, purchaseType, paymentProvider });
 }
 
 export async function getOrder(orderId: string) {
   const order = await orderRepository.findById(orderId);
   if (!order) throw new AppError('Order not found', 404);
   return order;
+}
+
+// Dedicated retrieval endpoint — mirrors credentialViewService.revealCredentials in
+// shape (one explicit call per order) even though, unlike login/password, none of this
+// is encrypted at rest: a phone number and a reference aren't account secrets.
+export async function getCashpointProof(orderId: string) {
+  const order = await orderRepository.findById(orderId);
+  if (!order || order.payment?.provider !== 'cashpoint') {
+    throw new AppError('No cashpoint payment for this order', 404);
+  }
+
+  return {
+    status: order.payment.status,
+    senderPhone: order.payment.senderPhone,
+    reference: order.payment.reference,
+    proofImageUrl: order.payment.proofImageUrl,
+  };
 }

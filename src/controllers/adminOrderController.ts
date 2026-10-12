@@ -7,6 +7,7 @@ export const listOrders = asyncHandler(async (req, res) => {
     await orderService.listOrders({
       status: req.query.status as string | undefined,
       purchaseType: req.query.purchaseType as string | undefined,
+      paymentProvider: req.query.paymentProvider as string | undefined,
     }),
   );
 });
@@ -27,6 +28,10 @@ export const getCredentials = asyncHandler(async (req, res) => {
   res.json(await credentialViewService.revealCredentials(req.params.id));
 });
 
+export const getCashpointProof = asyncHandler(async (req, res) => {
+  res.json(await orderService.getCashpointProof(req.params.id));
+});
+
 export const rejectOrder = asyncHandler(async (req, res) => {
   res.json(await orderService.rejectOrder(req.params.id, req.body.note));
 });
@@ -37,4 +42,16 @@ export const flagIssue = asyncHandler(async (req, res) => {
 
 export const resolveIssue = asyncHandler(async (req, res) => {
   res.json(await orderService.resolveIssue(req.params.id));
+});
+
+export const confirmCashpointPayment = asyncHandler(async (req, res) => {
+  res.json(await orderService.confirmCashpointPayment(req.params.id));
+});
+
+export const rejectCashpointPayment = asyncHandler(async (req, res) => {
+  res.json(await orderService.rejectCashpointPayment(req.params.id, req.body.reason));
+});
+
+export const launchG2bulkDelivery = asyncHandler(async (req, res) => {
+  res.json(await orderService.launchG2bulkDelivery(req.params.id));
 });

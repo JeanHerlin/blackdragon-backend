@@ -6,7 +6,7 @@ export const getContext = asyncHandler(async (req, res) => {
 });
 
 export const submit = asyncHandler(async (req, res) => {
-  const { targetUid, login, password } = req.body;
-  await credentialDeliveryService.submitCredentials(req.params.token, { targetUid, login, password });
+  const { login, password, provider } = req.body;
+  await credentialDeliveryService.submitCredentials(req.params.token, { login, password, provider });
   res.json({ message: 'Credentials received.' });
 });

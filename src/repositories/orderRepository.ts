@@ -20,6 +20,13 @@ export function createOrder(data: Prisma.OrderUncheckedCreateInput) {
   return prisma.order.create({ data, include: withRelations });
 }
 
+// Powers the bot's "suivre ma commande" / "mes commandes" — a customer only ever asks
+// about their own orders, scoped by their own PSID, never by order id (they're never
+// shown one to type back in).
+export function listByMessengerPsid(messengerPsid: string, limit: number) {
+  return prisma.order.findMany({ where: { messengerPsid }, orderBy: { createdAt: 'desc' }, take: limit, include: withRelations });
+}
+
 export function createDeliveryItems(deliveryId: string, items: { catalogEntryId: string; label: string }[]) {
   return prisma.deliveryItem.createMany({ data: items.map((item) => ({ deliveryId, ...item })) });
 }
@@ -66,9 +73,26 @@ export function countUidDeliveryFailed() {
   return prisma.order.count({ where: { purchaseType: 'uid', status: 'delivery_failed' } });
 }
 
-export async function listOrders({ status, purchaseType }: { status?: string; purchaseType?: string } = {}) {
+// Cashpoint proofs awaiting admin validation, for "uid" orders specifically — "compte"
+// ones are already covered by countNeedsAttention via "manual_pending" (credentials get
+// asked for the moment proof is submitted, see paymentProofService.submitProof), but a
+// "uid" order's own status never changes on proof submission, so without this it would
+// never surface anywhere once email-per-event notifications are gone.
+export function countUidCashpointProofPending() {
+  return prisma.order.count({ where: { purchaseType: 'uid', payment: { provider: 'cashpoint', status: 'proof_submitted' } } });
+}
+
+export async function listOrders({
+  status,
+  purchaseType,
+  paymentProvider,
+}: { status?: string; purchaseType?: string; paymentProvider?: string } = {}) {
   const orders = await prisma.order.findMany({
-    where: { ...(status ? { status } : {}), ...(purchaseType ? { purchaseType } : {}) },
+    where: {
+      ...(status ? { status } : {}),
+      ...(purchaseType ? { purchaseType } : {}),
+      ...(paymentProvider ? { payment: { provider: paymentProvider } } : {}),
+    },
     include: withRelations,
     orderBy: { createdAt: 'asc' },
   });
@@ -210,6 +234,25 @@ export function findPaymentByReference(providerRef: string) {
 
 export function updatePaymentStatus(orderId: string, status: string) {
   return prisma.payment.update({ where: { orderId }, data: { status } });
+}
+
+export function updatePayment(orderId: string, data: Prisma.PaymentUpdateInput) {
+  return prisma.payment.update({ where: { orderId }, data });
+}
+
+export function createPaymentProofToken(orderId: string, data: Omit<Prisma.PaymentProofTokenUncheckedCreateInput, 'orderId'>) {
+  return prisma.paymentProofToken.create({ data: { orderId, ...data } });
+}
+
+export function findPaymentProofTokenByHash(tokenHash: string) {
+  return prisma.paymentProofToken.findUnique({
+    where: { tokenHash },
+    include: { order: { include: withRelations } },
+  });
+}
+
+export function markPaymentProofTokenUsed(id: string) {
+  return prisma.paymentProofToken.update({ where: { id }, data: { usedAt: new Date() } });
 }
 
 export function createDelivery(orderId: string, data: Omit<Prisma.DeliveryUncheckedCreateInput, 'orderId'>) {

@@ -27,3 +27,13 @@ export const detach = asyncHandler(async (req, res) => {
   await promoCodeService.detachFromProduct(req.params.id, req.params.productId);
   res.json({ ok: true });
 });
+
+export const attachAll = asyncHandler(async (req, res) => {
+  const { discountType, discountValue } = req.body;
+  res.status(201).json(await promoCodeService.attachToAllProducts({ promoCodeId: req.params.id, discountType, discountValue }));
+});
+
+export const detachAll = asyncHandler(async (req, res) => {
+  await promoCodeService.detachFromAllProducts(req.params.id);
+  res.json({ ok: true });
+});

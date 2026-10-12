@@ -6,18 +6,24 @@ const PAPI_ENDPOINT = 'https://app.papi.mg/engine/api/payment-links';
 interface PapiConfig {
   apiKey?: string;
   notificationUrl: string;
+  // isTestMode per docs.papi.mg: labels the transaction as a test in Papi's dashboard,
+  // but mobile money still moves real funds — only card payments (with Papi's own
+  // dashboard "Test Mode" toggle + their test card) move no money at all. This flag
+  // alone does NOT make mobile-money payments free.
+  testMode: boolean;
 }
 
-// Real papi.mg integration, per docs.papi.mg — inactive until PAYMENT_PROVIDER=papi and
-// a real token are set. Not exercised by any test in this codebase yet (no key available).
+// Real papi.mg integration, per docs.papi.mg/fr/docs/developper-guide/integration-guide.
 export default class PapiPaymentProvider extends PaymentProvider {
   private apiKey?: string;
   private notificationUrl: string;
+  private testMode: boolean;
 
-  constructor({ apiKey, notificationUrl }: PapiConfig) {
+  constructor({ apiKey, notificationUrl, testMode }: PapiConfig) {
     super();
     this.apiKey = apiKey;
     this.notificationUrl = notificationUrl;
+    this.testMode = testMode;
   }
 
   async createPaymentLink({ reference, amount, description, clientName }: CreatePaymentLinkInput): Promise<PaymentLink> {
@@ -30,6 +36,7 @@ export default class PapiPaymentProvider extends PaymentProvider {
         description,
         clientName: clientName || 'Client',
         notificationUrl: this.notificationUrl,
+        isTestMode: this.testMode,
       }),
     });
 
@@ -38,7 +45,7 @@ export default class PapiPaymentProvider extends PaymentProvider {
       throw new AppError(`Papi request failed (${response.status}): ${errorBody}`, 502);
     }
 
-    const data = (await response.json()) as { paymentLink: string };
-    return { paymentLink: data.paymentLink };
+    const data = (await response.json()) as { paymentLink: string; notificationToken?: string };
+    return { paymentLink: data.paymentLink, notificationToken: data.notificationToken };
   }
 }

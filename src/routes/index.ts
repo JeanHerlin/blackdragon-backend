@@ -13,7 +13,7 @@ import adminUploadRoutes from './adminUploadRoutes';
 import adminPushRoutes from './adminPushRoutes';
 import adminPromoCodeRoutes from './adminPromoCodeRoutes';
 import messengerRoutes from '../adapters/messenger/messengerRoutes';
-import debugPapiWebhookRoutes from './debugPapiWebhookRoutes';
+import * as papiWebhookController from '../controllers/papiWebhookController';
 import * as adminStatsController from '../controllers/adminStatsController';
 
 const router = express.Router();
@@ -25,7 +25,7 @@ router.use('/catalog', catalogRoutes);
 router.use('/orders', orderRoutes);
 router.use('/public', publicRoutes);
 router.use('/webhooks/messenger', messengerRoutes);
-router.use('/webhooks/papi', debugPapiWebhookRoutes);
+router.post('/webhooks/papi', papiWebhookController.receive);
 
 router.use('/admin/orders', authenticate, adminOrderRoutes);
 router.use('/admin/products', authenticate, adminCatalogRoutes);

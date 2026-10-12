@@ -36,6 +36,24 @@ export function detachFromProduct(promoCodeId: string, productId: string) {
   return prisma.promoCodeProduct.deleteMany({ where: { promoCodeId, productId } });
 }
 
+// One click instead of attaching product by product — upsert per product so re-running
+// it (e.g. after the catalog grows) just refreshes the discount instead of erroring.
+export function attachToProducts(promoCodeId: string, productIds: string[], discountType: string, discountValue: number) {
+  return prisma.$transaction(
+    productIds.map((productId) =>
+      prisma.promoCodeProduct.upsert({
+        where: { promoCodeId_productId: { promoCodeId, productId } },
+        create: { promoCodeId, productId, discountType, discountValue },
+        update: { discountType, discountValue },
+      }),
+    ),
+  );
+}
+
+export function detachAll(promoCodeId: string) {
+  return prisma.promoCodeProduct.deleteMany({ where: { promoCodeId } });
+}
+
 // Checkout-time lookup — a code only actually discounts a given order if it's active
 // AND has an explicit attachment to that exact product (see client's requirement that
 // the same code can carry a different discount per product).
@@ -44,4 +62,11 @@ export function findAttachmentForCheckout(code: string, productId: string) {
     where: { productId, promoCode: { code, isActive: true } },
     include: { promoCode: true },
   });
+}
+
+// Powers the bot's decision to even ask "as-tu un code promo ?" — no point prompting
+// when nothing could possibly apply to this product.
+export async function hasActivePromoForProduct(productId: string): Promise<boolean> {
+  const match = await prisma.promoCodeProduct.findFirst({ where: { productId, promoCode: { isActive: true } } });
+  return match !== null;
 }

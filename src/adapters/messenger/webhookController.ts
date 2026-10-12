@@ -29,8 +29,12 @@ function isValidSignature(req: Request): boolean {
 
 interface MessagingEntry {
   sender: { id: string };
-  message?: { text?: string; quick_reply?: { payload: string } };
+  message?: { text?: string; quick_reply?: { payload: string }; is_echo?: boolean };
   postback?: { payload: string };
+  // Present (instead of message/postback) on delivery and read receipts — never
+  // forwarded to the flow, see the filter below.
+  delivery?: unknown;
+  read?: unknown;
 }
 
 // Facebook requires a fast 200 and will retry (then eventually disable the webhook) on
@@ -46,6 +50,22 @@ export function receive(req: Request, res: Response): void {
   const entries = (req.body?.entry || []) as { messaging?: MessagingEntry[] }[];
   for (const entry of entries) {
     for (const event of entry.messaging || []) {
+      // A single webhook call bundles more than just the user's message: delivery/read
+      // receipts, and an echo of the bot's own reply (message.is_echo) once the Page
+      // sends one. None of these carry real user input — forwarding them to the
+      // conversation flow made it treat each as "unrecognized input" and restart the
+      // flow, which is why the welcome message was repeating.
+      if (event.message?.is_echo) {
+        console.log(`[messenger webhook] skipped (echo of our own message) from ${event.sender.id}`);
+        continue;
+      }
+      if (!event.message && !event.postback) {
+        console.log(`[messenger webhook] skipped (delivery/read receipt, no real content) from ${event.sender.id}`);
+        continue;
+      }
+
+      console.log(`[messenger webhook] <- ${event.sender.id}:`, JSON.stringify(event.postback || event.message));
+
       handleEvent(event.sender.id, event).catch((err) => {
         console.error(`[messenger] failed to handle event for ${event.sender.id}:`, err);
       });

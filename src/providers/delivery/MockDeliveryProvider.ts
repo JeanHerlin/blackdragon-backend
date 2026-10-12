@@ -8,7 +8,7 @@ export default class MockDeliveryProvider extends DeliveryProvider {
     if (!uid || uid.length < 3) {
       throw new AppError('Player not found for this UID', 404);
     }
-    return { pseudo: `Player_${uid.slice(-4)}` };
+    return { pseudo: `Player_${uid.slice(-4)}`, region: 'ID', level: 42 };
   }
 
   async deliverTopUp({ uid }: DeliverTopUpInput): Promise<DeliverTopUpResult> {

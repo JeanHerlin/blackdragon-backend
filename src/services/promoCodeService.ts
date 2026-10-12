@@ -32,6 +32,12 @@ export function setPromoCodeActive(id: string, isActive: boolean) {
   return promoCodeRepository.setActive(id, isActive);
 }
 
+function assertValidDiscount(discountType: string, discountValue: number): void {
+  if (!DISCOUNT_TYPES.includes(discountType)) throw new AppError('discountType must be "percent" or "fixed"', 400);
+  if (typeof discountValue !== 'number' || discountValue <= 0) throw new AppError('discountValue must be a positive number', 400);
+  if (discountType === 'percent' && discountValue > 100) throw new AppError('Une remise en pourcentage ne peut pas dépasser 100', 400);
+}
+
 export async function attachToProduct({
   promoCodeId,
   productId,
@@ -43,9 +49,7 @@ export async function attachToProduct({
   discountType: string;
   discountValue: number;
 }) {
-  if (!DISCOUNT_TYPES.includes(discountType)) throw new AppError('discountType must be "percent" or "fixed"', 400);
-  if (typeof discountValue !== 'number' || discountValue <= 0) throw new AppError('discountValue must be a positive number', 400);
-  if (discountType === 'percent' && discountValue > 100) throw new AppError('Une remise en pourcentage ne peut pas dépasser 100', 400);
+  assertValidDiscount(discountType, discountValue);
 
   const product = await catalogRepository.findProductById(productId);
   if (!product) throw new AppError('Product not found', 404);
@@ -55,6 +59,35 @@ export async function attachToProduct({
 
 export function detachFromProduct(promoCodeId: string, productId: string) {
   return promoCodeRepository.detachFromProduct(promoCodeId, productId);
+}
+
+// One click for "5% sur tout le catalogue" instead of attaching product by product —
+// re-running it with a new value just refreshes every attachment (upsert underneath).
+export async function attachToAllProducts({
+  promoCodeId,
+  discountType,
+  discountValue,
+}: {
+  promoCodeId: string;
+  discountType: string;
+  discountValue: number;
+}) {
+  assertValidDiscount(discountType, discountValue);
+
+  const productIds = await catalogRepository.listAllProductIds();
+  if (productIds.length === 0) return [];
+
+  return promoCodeRepository.attachToProducts(promoCodeId, productIds, discountType, discountValue);
+}
+
+export function detachFromAllProducts(promoCodeId: string) {
+  return promoCodeRepository.detachAll(promoCodeId);
+}
+
+// Called by the Messenger bot before it even offers the "as-tu un code promo ?" step —
+// no point prompting when nothing could possibly apply to this product.
+export function hasActivePromoForProduct(productId: string) {
+  return promoCodeRepository.hasActivePromoForProduct(productId);
 }
 
 // Called by orderService at checkout — a code is optional, so no code given is not an

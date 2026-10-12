@@ -103,6 +103,18 @@ const PUBLIC_PRODUCT_SELECT = {
   game: { select: { code: true, imageUrl: true } },
 } satisfies Prisma.ProductSelect;
 
+// A product g2bulk no longer actually sells must never be offered to a customer, even
+// while it's still Product.isActive on our side — that flag is admin-controlled and
+// doesn't auto-follow g2bulk's own catalogue (see g2bulkCatalogSyncService, which only
+// flips SupplierCatalogEntry.isAvailable). A bundle needs every one of its components
+// still available, not just its own row. Manual products (no sourceCatalogEntry, no
+// bundleItems) are never caught by this — there's nothing at g2bulk to go stale.
+const EXCLUDE_UNAVAILABLE_AT_SUPPLIER = {
+  NOT: {
+    OR: [{ sourceCatalogEntry: { isAvailable: false } }, { bundleItems: { some: { catalogEntry: { isAvailable: false } } } }],
+  },
+} satisfies Prisma.ProductWhereInput;
+
 export function listProducts({
   gameId,
   categoryId,
@@ -120,6 +132,7 @@ export function listProducts({
       ...(categoryId ? { categoryId } : {}),
       ...(productType ? { productType } : {}),
       ...(onlyActive ? { isActive: true } : {}),
+      ...EXCLUDE_UNAVAILABLE_AT_SUPPLIER,
     },
     select: PUBLIC_PRODUCT_SELECT,
   });
@@ -130,7 +143,7 @@ export function listProducts({
 export function listProductTypes(categoryId: string) {
   return prisma.product
     .findMany({
-      where: { categoryId, isActive: true },
+      where: { categoryId, isActive: true, ...EXCLUDE_UNAVAILABLE_AT_SUPPLIER },
       distinct: ['productType'],
       select: { productType: true },
     })
@@ -171,6 +184,12 @@ export function countOrdersForProduct(productId: string) {
 
 export function deleteProduct(id: string) {
   return prisma.product.delete({ where: { id } });
+}
+
+// Powers "apply this promo code to every product" — every product, any category,
+// active or not (the admin may want a code ready before a product goes live).
+export function listAllProductIds() {
+  return prisma.product.findMany({ select: { id: true } }).then((rows) => rows.map((r) => r.id));
 }
 
 export function findProductWithBundleItems(id: string) {

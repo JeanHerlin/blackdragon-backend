@@ -5,6 +5,11 @@ export interface VerifyPlayerInput {
 
 export interface VerifyPlayerResult {
   pseudo: string;
+  // Not confirmed in g2bulk's checkPlayerId response — included defensively so the bot
+  // can show them to the customer when (if) the API actually returns them, without
+  // assuming they're always present.
+  region?: string;
+  level?: string | number;
 }
 
 // One call = one g2bulk catalogue entry delivered — a bundle product calls this once

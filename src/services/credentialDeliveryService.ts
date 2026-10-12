@@ -5,6 +5,7 @@ import * as credentialCrypto from '../utils/credentialCrypto';
 import { hashToken } from '../utils/secureToken';
 
 const INVALID_LINK_MESSAGE = 'This link is no longer valid or has expired.';
+const VALID_PROVIDERS = ['facebook', 'google', 'twitter'];
 
 async function resolveValidToken(rawToken: string) {
   const record = await orderRepository.findCredentialTokenByHash(hashToken(rawToken));
@@ -27,26 +28,26 @@ export async function getDeliveryContext(rawToken: string) {
   return {
     productLabel: order.product.label,
     amount: order.amount,
-    targetUid: order.targetUid,
   };
 }
 
 export async function submitCredentials(
   rawToken: string,
-  { targetUid, login, password }: { targetUid: string; login: string; password: string }
+  { login, password, provider }: { login: string; password: string; provider: string }
 ): Promise<void> {
   // Revalidate from scratch rather than trusting the earlier GET — see architecture doc §4.3.
   const record = await resolveValidToken(rawToken);
   const { order } = record;
 
-  if (targetUid !== order.targetUid) {
-    throw new AppError('The confirmed UID does not match this order', 400);
-  }
   if (!login || !password) {
     throw new AppError('Login and password are required', 400);
   }
+  if (!VALID_PROVIDERS.includes(provider)) {
+    throw new AppError('provider must be "facebook", "google" or "twitter"', 400);
+  }
 
   await orderRepository.createAccountCredential(order.id, {
+    provider,
     loginEncrypted: credentialCrypto.encrypt(login),
     passwordEncrypted: credentialCrypto.encrypt(password),
   });

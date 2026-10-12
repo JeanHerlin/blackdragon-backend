@@ -14,10 +14,12 @@ interface GenericElement {
   buttons: { title: string; payload: string }[];
 }
 
-async function callSendApi(body: unknown): Promise<void> {
+async function callSendApi(body: any): Promise<void> {
   if (!env.messenger.pageAccessToken) {
     throw new Error('MESSENGER_PAGE_ACCESS_TOKEN is not configured');
   }
+
+  console.log(`[messengerClient] -> ${body.recipient?.id}:`, JSON.stringify(body.message));
 
   const response = await fetch(`${GRAPH_URL}/me/messages?access_token=${env.messenger.pageAccessToken}`, {
     method: 'POST',
@@ -30,6 +32,8 @@ async function callSendApi(body: unknown): Promise<void> {
     console.error(`[messengerClient] Send API failed (${response.status}):`, errorBody);
     throw new Error(`Messenger Send API responded with HTTP ${response.status}`);
   }
+
+  console.log(`[messengerClient] sent ok -> ${body.recipient?.id}`);
 }
 
 export async function sendText(psid: string, text: string): Promise<void> {
@@ -48,7 +52,9 @@ export async function sendQuickReplies(psid: string, text: string, options: Quic
 
 // One Generic Template per call, capped at 10 elements per Messenger's own limit — the
 // bot flow paginates the catalogue into batches of 10 if a type ever has more than that.
-export async function sendGenericTemplate(psid: string, elements: GenericElement[]): Promise<void> {
+// quickReplies is optional — Messenger allows quick replies alongside an attachment
+// message, used here to keep a "Recommencer" escape hatch available on the carousel too.
+export async function sendGenericTemplate(psid: string, elements: GenericElement[], quickReplies?: QuickReplyOption[]): Promise<void> {
   await callSendApi({
     recipient: { id: psid },
     message: {
@@ -62,6 +68,25 @@ export async function sendGenericTemplate(psid: string, elements: GenericElement
             image_url: el.imageUrl || undefined,
             buttons: el.buttons.map((b) => ({ type: 'postback', title: b.title, payload: b.payload })),
           })),
+        },
+      },
+      ...(quickReplies ? { quick_replies: quickReplies.map((o) => ({ content_type: 'text', title: o.title, payload: o.payload })) } : {}),
+    },
+  });
+}
+
+// A tappable button that opens the link directly in Messenger's built-in webview —
+// nicer UX than pasting a raw URL as plain text, which the customer has to tap-and-copy.
+export async function sendButtonTemplate(psid: string, text: string, buttonTitle: string, url: string): Promise<void> {
+  await callSendApi({
+    recipient: { id: psid },
+    message: {
+      attachment: {
+        type: 'template',
+        payload: {
+          template_type: 'button',
+          text,
+          buttons: [{ type: 'web_url', title: buttonTitle, url }],
         },
       },
     },

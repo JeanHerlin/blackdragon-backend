@@ -32,7 +32,17 @@ const env = {
   },
 
   // Not required: only read when PAYMENT_PROVIDER=papi / DELIVERY_PROVIDER=g2bulk is set.
-  papi: { apiKey: process.env.PAPI_API_KEY },
+  // papi.testMode defaults to true — real money going out by accident is worse than a
+  // payment staying labeled "test" by mistake (see PapiPaymentProvider's isTestMode note:
+  // mobile money moves real funds either way, only card payments are truly free to test).
+  // papi.webhookSecret is optional: when set, papiWebhookController verifies
+  // X-Papi-Signature on top of the per-transaction notificationToken check; Papi's docs
+  // mention the header but not its exact algorithm, so this is opt-in until confirmed.
+  papi: {
+    apiKey: process.env.PAPI_API_KEY,
+    testMode: process.env.PAPI_TEST_MODE !== 'false',
+    webhookSecret: process.env.PAPI_WEBHOOK_SECRET,
+  },
   g2bulk: { apiKey: process.env.G2BULK_API_KEY },
 
   // Not required at boot: the bot adapter checks these itself and refuses webhook calls
