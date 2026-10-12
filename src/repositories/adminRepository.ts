@@ -1,26 +1,22 @@
-import fs from 'fs';
-import path from 'path';
+import prisma from '../config/prisma';
 
 export interface AdminRecord {
   email: string;
   passwordHash: string;
 }
 
-const DATA_FILE = path.join(__dirname, '..', '..', 'data', 'admin.json');
+// Only ever one row — single-admin product, see schema.prisma's Admin model comment.
+export async function getAdmin(): Promise<AdminRecord | null> {
+  return prisma.admin.findFirst();
+}
 
-function readAdmin(): AdminRecord {
-  if (!fs.existsSync(DATA_FILE)) {
-    throw new Error(`No admin account found. Run "npm run seed:admin" first (${DATA_FILE} is missing).`);
+// Create-or-replace: the only admin row becomes exactly this email/hash, matching the
+// previous JSON-file behavior (writeAdmin always fully overwrote the file).
+export async function writeAdmin(admin: AdminRecord): Promise<void> {
+  const existing = await prisma.admin.findFirst();
+  if (existing) {
+    await prisma.admin.update({ where: { id: existing.id }, data: admin });
+  } else {
+    await prisma.admin.create({ data: admin });
   }
-  return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
 }
-
-export function writeAdmin(admin: AdminRecord): void {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(admin, null, 2));
-}
-
-export function getAdmin(): AdminRecord {
-  return readAdmin();
-}
-
-export { DATA_FILE };

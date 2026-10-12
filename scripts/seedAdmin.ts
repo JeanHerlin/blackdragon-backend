@@ -9,7 +9,7 @@ async function seed() {
   const password = process.env.SEED_ADMIN_PASSWORD || crypto.randomBytes(9).toString('base64url');
 
   const passwordHash = await bcrypt.hash(password, 10);
-  adminRepository.writeAdmin({ email, passwordHash });
+  await adminRepository.writeAdmin({ email, passwordHash });
 
   console.log('Admin account created:');
   console.log(`  email:    ${email}`);
@@ -17,4 +17,4 @@ async function seed() {
   console.log('Store this password now — it will not be shown again.');
 }
 
-seed();
+seed().then(() => process.exit(0));

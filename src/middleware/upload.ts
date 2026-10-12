@@ -1,27 +1,16 @@
-import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
 import multer from 'multer';
+import env from '../config/env';
 
-const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads', 'products');
-fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
-const ALLOWED_MIME_TYPES: Record<string, string> = {
-  'image/png': '.png',
-  'image/jpeg': '.jpg',
-  'image/webp': '.webp',
-};
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => cb(null, `${crypto.randomUUID()}${ALLOWED_MIME_TYPES[file.mimetype]}`),
-});
-
+// Memory storage, not disk — the file goes straight to the configured StorageProvider
+// (Cloudinary in production; see providers/storage) as a buffer, never touching the
+// filesystem, so this works unchanged on a read-only serverless deploy.
 const uploadImage = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: env.uploadMaxSizeBytes },
   fileFilter: (req, file, cb) => {
-    if (!ALLOWED_MIME_TYPES[file.mimetype]) {
+    if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
       cb(new Error('Only PNG, JPEG or WebP images are allowed'));
       return;
     }
@@ -29,5 +18,4 @@ const uploadImage = multer({
   },
 });
 
-export { UPLOADS_DIR };
 export default uploadImage;

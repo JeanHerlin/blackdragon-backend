@@ -7,6 +7,16 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Single-admin login — was a local JSON file (backend/data/admin.json), moved to the DB
+// so it survives a stateless/read-only filesystem deploy (Vercel). Still just one row in
+// practice: adminRepository always reads/writes the first (and only) record.
+model Admin {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
 model Game {
   id                    String                 @id @default(uuid())
   code                  String                 @unique

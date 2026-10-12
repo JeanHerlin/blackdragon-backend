@@ -25,12 +25,10 @@ interface ResetTokenState {
 let activeResetToken: ResetTokenState | null = null;
 
 export async function login({ email, password }: { email: string; password: string }) {
-  let admin;
-  try {
-    admin = adminRepository.getAdmin();
-  } catch {
-    // No admin.json yet (fresh prod deploy, no account created at all) — same generic
-    // message as a wrong password, so this never reveals bootstrap state to a caller.
+  const admin = await adminRepository.getAdmin();
+  if (!admin) {
+    // No admin row yet (fresh deploy, no account created at all) — same generic message
+    // as a wrong password, so this never reveals bootstrap state to a caller.
     throw new AppError('Invalid email or password', 401);
   }
 
@@ -100,13 +98,13 @@ export async function resetPassword({ token, newPassword }: { token: string; new
   const passwordHash = await bcrypt.hash(newPassword, 10);
   // Replaces the admin record outright (email included) rather than only updating the
   // password on the existing one — see function comment above.
-  adminRepository.writeAdmin({ email: activeResetToken.newEmail, passwordHash });
+  await adminRepository.writeAdmin({ email: activeResetToken.newEmail, passwordHash });
   activeResetToken.used = true;
 }
 
 export async function getProfile(email: string) {
-  const admin = adminRepository.getAdmin();
-  if (email !== admin.email) {
+  const admin = await adminRepository.getAdmin();
+  if (!admin || email !== admin.email) {
     throw new AppError('Admin not found', 404);
   }
   return { email: admin.email };

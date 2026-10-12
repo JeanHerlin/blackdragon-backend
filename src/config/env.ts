@@ -19,6 +19,12 @@ const env = {
   // Controls which providers are wired in — see providers/*/index.ts factories.
   paymentProvider: process.env.PAYMENT_PROVIDER || 'mock',
   deliveryProvider: process.env.DELIVERY_PROVIDER || 'mock',
+  // 'local' writes to disk (uploads/) — fine for local dev, but breaks on a read-only
+  // serverless filesystem (Vercel). 'cloudinary' is required there.
+  storageProvider: process.env.STORAGE_PROVIDER || 'local',
+  // Every upload endpoint (product images, cashpoint proof screenshots) shares this one
+  // limit — see middleware/upload.ts and uploadProof.ts.
+  uploadMaxSizeBytes: 20 * 1024 * 1024,
 
   // open_er_api needs no API key, so it's the safe default — no pending-credentials
   // reason to mock it like payment/delivery, but 'mock' stays available for offline dev.
@@ -44,6 +50,13 @@ const env = {
     webhookSecret: process.env.PAPI_WEBHOOK_SECRET,
   },
   g2bulk: { apiKey: process.env.G2BULK_API_KEY },
+
+  // Not required at boot: only read when STORAGE_PROVIDER=cloudinary is set.
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+    apiKey: process.env.CLOUDINARY_API_KEY,
+    apiSecret: process.env.CLOUDINARY_API_SECRET,
+  },
 
   // Not required at boot: the bot adapter checks these itself and refuses webhook calls
   // cleanly if missing, rather than crashing the whole server before setup is finished.
