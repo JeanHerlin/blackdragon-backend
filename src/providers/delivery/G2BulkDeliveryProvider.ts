@@ -3,6 +3,13 @@ import AppError from '../../utils/AppError';
 
 const BASE_URL = 'https://api.g2bulk.com/v1';
 
+// g2bulk's own game code for checkPlayerId — not the same as our internal Game.code
+// ('free_fire'). Verified directly against the real API: "freefire_global" rejects every
+// UID (400, valid:"invalid") even for real accounts, only the actual region works —
+// matches the single region this project's catalogue sync already uses (see
+// prisma/seed.ts's REGION constant).
+const FREEFIRE_REGION = 'freefire_me';
+
 interface G2BulkConfig {
   apiKey?: string;
 }
@@ -21,14 +28,21 @@ export default class G2BulkDeliveryProvider extends DeliveryProvider {
     const response = await fetch(`${BASE_URL}/games/checkPlayerId`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': this.apiKey },
-      body: JSON.stringify({ game: 'free_fire', uid }),
+      body: JSON.stringify({ game: FREEFIRE_REGION, user_id: uid }),
     });
 
-    if (!response.ok) {
+    // An unknown/invalid UID responds 400 with valid:"invalid" — but check the body
+    // too (not just the status) in case g2bulk ever returns 200 with valid:"invalid".
+    const data = (await response.json().catch(() => null)) as
+      | { valid?: string; region?: string; nickname?: string; username?: string }
+      | null;
+
+    if (!response.ok || !data || data.valid !== 'valid') {
       throw new AppError('Player not found for this UID', 404);
     }
-    const data = (await response.json()) as { pseudo: string; region?: string; level?: string | number };
-    return { pseudo: data.pseudo, region: data.region, level: data.level };
+
+    // No "level" field exists in the real response — region does, under the same name.
+    return { pseudo: data.nickname || data.username || uid, region: data.region };
   }
 
   async deliverTopUp({ uid, supplierRef }: DeliverTopUpInput): Promise<DeliverTopUpResult> {

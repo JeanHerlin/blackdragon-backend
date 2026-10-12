@@ -282,7 +282,10 @@ async function handleUidSubmission(psid: string, data: ConversationData, targetU
     verification = await orderService.verifyPlayer(targetUid);
   } catch (err: any) {
     console.error(`[conversationFlow] ${psid} verifyPlayer failed for uid=${targetUid}:`, err.message);
-    await messengerClient.sendText(psid, `UID introuvable chez Free Fire. Vérifie et renvoie-le.`);
+    // Stays in awaiting_uid either way (same as before — the customer can just retype),
+    // but without an escape hatch here a wrong/mistyped UID trapped the customer with no
+    // visible way out besides knowing to type "menu" or "retour" by heart.
+    await messengerClient.sendQuickReplies(psid, 'UID introuvable chez Free Fire. Vérifie et renvoie-le.', [BACK_OPTION, RESTART_OPTION]);
     return;
   }
 
@@ -466,7 +469,10 @@ async function handlePaymentMethodChoice(psid: string, data: ConversationData, p
     }
   } catch (err: any) {
     console.error(`[conversationFlow] ${psid} order creation failed:`, err.message);
-    await messengerClient.sendText(psid, `Oups, une erreur est survenue : ${err.message}`);
+    // The state resets to 'start' right after regardless, but that alone only helps on
+    // the customer's *next* message — a plain error with no button here left the same
+    // kind of dead end as the UID-not-found case, just one step later in the flow.
+    await messengerClient.sendQuickReplies(psid, `Oups, une erreur est survenue : ${err.message}`, [RESTART_OPTION]);
   }
 
   await conversationRepository.resetState(psid);
