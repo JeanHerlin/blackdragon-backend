@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { Request, Response } from 'express';
 import env from '../../config/env';
 import { handleEvent } from './conversationFlow';
+import * as messengerClient from './messengerClient';
 
 // One-time handshake Meta performs when you click "Verify and Save" on the webhook
 // subscription — never called again afterward.
@@ -72,9 +73,13 @@ export async function receive(req: Request, res: Response): Promise<void> {
       console.log(`[messenger webhook] <- ${event.sender.id}:`, JSON.stringify(event.postback || event.message));
 
       tasks.push(
-        handleEvent(event.sender.id, event).catch((err) => {
-          console.error(`[messenger] failed to handle event for ${event.sender.id}:`, err);
-        }),
+        messengerClient
+          .sendTypingOn(event.sender.id)
+          .catch(() => {})
+          .then(() => handleEvent(event.sender.id, event))
+          .catch((err) => {
+            console.error(`[messenger] failed to handle event for ${event.sender.id}:`, err);
+          }),
       );
     }
   }

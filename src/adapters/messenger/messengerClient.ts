@@ -19,7 +19,7 @@ async function callSendApi(body: any): Promise<void> {
     throw new Error('MESSENGER_PAGE_ACCESS_TOKEN is not configured');
   }
 
-  console.log(`[messengerClient] -> ${body.recipient?.id}:`, JSON.stringify(body.message));
+  console.log(`[messengerClient] -> ${body.recipient?.id}:`, JSON.stringify(body.message ?? { sender_action: body.sender_action }));
 
   const response = await fetch(`${GRAPH_URL}/me/messages?access_token=${env.messenger.pageAccessToken}`, {
     method: 'POST',
@@ -34,6 +34,12 @@ async function callSendApi(body: any): Promise<void> {
   }
 
   console.log(`[messengerClient] sent ok -> ${body.recipient?.id}`);
+}
+
+// Shows the 3-dot "typing..." indicator — expires after ~20s or as soon as the next
+// message is sent, whichever comes first, so there's no need for a matching typing_off.
+export async function sendTypingOn(psid: string): Promise<void> {
+  await callSendApi({ recipient: { id: psid }, sender_action: 'typing_on' });
 }
 
 export async function sendText(psid: string, text: string): Promise<void> {
