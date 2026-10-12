@@ -37,17 +37,22 @@ interface MessagingEntry {
   read?: unknown;
 }
 
-// Facebook requires a fast 200 and will retry (then eventually disable the webhook) on
-// timeouts — acknowledge immediately, process after responding.
-export function receive(req: Request, res: Response): void {
+// Facebook tolerates several seconds before it considers this a timeout and retries —
+// plenty of room to actually await processing. We used to ack with 200 immediately and
+// process in the background unawaited, which works on a long-running Node process but
+// not on a serverless host (Vercel): the function can be frozen/torn down the instant
+// the response is sent, silently killing any work still in flight — the bot would
+// receive the message (logged, 200 returned) but never actually send its reply.
+// Awaiting here before responding is the only way that's reliable on every host.
+export async function receive(req: Request, res: Response): Promise<void> {
   if (!isValidSignature(req)) {
     res.sendStatus(403);
     return;
   }
 
-  res.sendStatus(200);
-
   const entries = (req.body?.entry || []) as { messaging?: MessagingEntry[] }[];
+  const tasks: Promise<void>[] = [];
+
   for (const entry of entries) {
     for (const event of entry.messaging || []) {
       // A single webhook call bundles more than just the user's message: delivery/read
@@ -66,9 +71,14 @@ export function receive(req: Request, res: Response): void {
 
       console.log(`[messenger webhook] <- ${event.sender.id}:`, JSON.stringify(event.postback || event.message));
 
-      handleEvent(event.sender.id, event).catch((err) => {
-        console.error(`[messenger] failed to handle event for ${event.sender.id}:`, err);
-      });
+      tasks.push(
+        handleEvent(event.sender.id, event).catch((err) => {
+          console.error(`[messenger] failed to handle event for ${event.sender.id}:`, err);
+        }),
+      );
     }
   }
+
+  await Promise.all(tasks);
+  res.sendStatus(200);
 }
